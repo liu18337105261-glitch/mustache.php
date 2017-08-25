@@ -12,6 +12,7 @@
 namespace Mustache;
 
 use Mustache\Exception\InvalidArgumentException;
+use Mustache\Exception\UnknownVariableException;
 
 /**
  * Mustache Template rendering Context.
@@ -24,14 +25,16 @@ class Context
     private $blockScopeIndex = 0;
 
     private $buggyPropertyShadowing = false;
+    private $strictVariables = false;
 
     /**
      * Mustache rendering Context constructor.
      *
      * @param mixed $context                Default rendering context (default: null)
      * @param bool  $buggyPropertyShadowing See Engine::getBuggyPropertyShadowing (default: false)
+     * @param bool  $strictVariables        Throw an exception when a variable is not found (default: false)
      */
-    public function __construct($context = null, $buggyPropertyShadowing = false)
+    public function __construct($context = null, $buggyPropertyShadowing = false, $strictVariables = false)
     {
         if ($context !== null) {
             $this->stack = [$context];
@@ -39,6 +42,7 @@ class Context
         }
 
         $this->buggyPropertyShadowing = $buggyPropertyShadowing;
+        $this->strictVariables = $strictVariables;
     }
 
     /**
@@ -261,6 +265,8 @@ class Context
      * @param int    $stackSize Number of frames in $stack
      *
      * @return mixed Variable value, or '' if not found
+     *
+     * @throws UnknownVariableException if strict variables are enabled and the variable is not found
      */
     private function findVariableInStack($id, array $stack, $stackSize)
     {
@@ -308,6 +314,10 @@ class Context
                     return $frame[$id];
                 }
             }
+        }
+
+        if ($this->strictVariables) {
+            throw new UnknownVariableException($id);
         }
 
         return '';

@@ -33,6 +33,7 @@ class Compiler
     private $entityFlags;
     private $charset;
     private $strictCallables;
+    private $strictVariables;
     private $blockContentDepth;
 
     // Optional Mustache specs
@@ -50,10 +51,11 @@ class Compiler
      * @param string $charset         (default: 'UTF-8')
      * @param bool   $strictCallables (default: false)
      * @param int    $entityFlags     (default: ENT_COMPAT)
+     * @param bool   $strictVariables (default: false)
      *
      * @return string Generated PHP source code
      */
-    public function compile($source, array $tree, $name, $customEscape = false, $charset = 'UTF-8', $strictCallables = false, $entityFlags = ENT_COMPAT)
+    public function compile($source, array $tree, $name, $customEscape = false, $charset = 'UTF-8', $strictCallables = false, $entityFlags = ENT_COMPAT, $strictVariables = false)
     {
         $this->pragmas            = $this->defaultPragmas;
         $this->sections           = [];
@@ -66,6 +68,7 @@ class Compiler
         $this->entityFlags        = $entityFlags;
         $this->charset            = $charset;
         $this->strictCallables    = $strictCallables;
+        $this->strictVariables    = $strictVariables;
         $this->blockContentDepth  = 0;
 
         $code = $this->writeCode($tree, $name);
@@ -227,7 +230,7 @@ class Compiler
 
         class %s extends \\Mustache\\Template
         {
-            private $lambdaHelper;%s%s%s
+            private $lambdaHelper;%s%s%s%s
 
             public function renderInternal(\\Mustache\\Context $context, $indent = \'\')
             {
@@ -244,7 +247,7 @@ class Compiler
     const KLASS_NO_LAMBDAS = '<?php
 
         class %s extends \\Mustache\\Template
-        {%s%s%s
+        {%s%s%s%s
             public function renderInternal(\\Mustache\\Context $context, $indent = \'\')
             {
                 $buffer = \'\';
@@ -255,6 +258,8 @@ class Compiler
         }';
 
     const STRICT_CALLABLE = 'protected $strictCallables = true;';
+
+    const STRICT_VARIABLE = 'protected $strictVariables = true;';
 
     const NO_LAMBDAS = 'protected $lambdas = false;';
 
@@ -276,10 +281,11 @@ class Compiler
         $klass    = empty($this->sections) && empty($this->blocks) ? self::KLASS_NO_LAMBDAS : self::KLASS;
 
         $callable = $this->strictCallables ? $this->prepare(self::STRICT_CALLABLE) : '';
+        $variable = $this->strictVariables ? $this->prepare(self::STRICT_VARIABLE) : '';
         $lambda   = $this->lambdas ? '' : $this->prepare(self::NO_LAMBDAS);
         $source   = ($this->lambdas && !empty($this->sections)) ? sprintf($this->prepare(self::SOURCE), var_export($this->source, true)) : '';
 
-        return sprintf($this->prepare($klass, 0, false, true), $name, $callable, $lambda, $source, $code, $sections, $blocks);
+        return sprintf($this->prepare($klass, 0, false, true), $name, $callable, $variable, $lambda, $source, $code, $sections, $blocks);
     }
 
     const BLOCK_VAR = '
@@ -603,7 +609,11 @@ class Compiler
     }
 
     const SECTION_CALL = '
-        $value = %s;%s
+        try {
+            $value = %s;%s
+        } catch (\\Mustache\\Exception\\UnknownVariableException $e) {
+            $value = "";
+        }
         $buffer .= $this->section%s($context, $indent, $value);
     ';
 
@@ -722,7 +732,11 @@ class Compiler
     }
 
     const INVERTED_SECTION = '
-        $value = %s;%s
+        try {
+            $value = %s;%s
+        } catch (\\Mustache\\Exception\\UnknownVariableException $e) {
+            $value = "";
+        }
         if (empty($value)) {
             %s
         }

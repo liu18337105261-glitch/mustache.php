@@ -13,6 +13,7 @@ namespace Mustache\Test;
 
 use Mustache\Context;
 use Mustache\Exception\InvalidArgumentException;
+use Mustache\Exception\UnknownVariableException;
 
 class ContextTest extends TestCase
 {
@@ -179,6 +180,26 @@ class ContextTest extends TestCase
         $context = new Context();
         $context->push(['a' => 1]);
         $context->findAnchoredDot('a');
+    }
+
+    public function testUnknownVariableThrowsException()
+    {
+        $this->expectException(UnknownVariableException::class);
+
+        $context = new Context(null, false, true);
+        $context->push(['a' => 1]);
+        $context->find('b');
+    }
+
+    public function testAnchoredDotNotationUnknownVariableThrowsException()
+    {
+        $this->expectException(UnknownVariableException::class);
+
+        $context = new Context(null, false, true);
+        $context->push([
+            'a' => ['b' => 1],
+        ]);
+        $context->find('a.c');
     }
 
     public function testNullArrayValueMasking()

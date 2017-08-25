@@ -31,6 +31,11 @@ abstract class Template
     /**
      * @var bool
      */
+    protected $strictVariables = false;
+
+    /**
+     * @var bool
+     */
     protected $lambdas = true;
 
     /**
@@ -147,7 +152,7 @@ abstract class Template
      */
     protected function prepareContextStack($context = null)
     {
-        $stack = new Context(null, $this->mustache->getBuggyPropertyShadowing());
+        $stack = new Context(null, $this->mustache->getBuggyPropertyShadowing(), $this->strictVariables);
 
         $helpers = $this->mustache->getHelpers();
         if (!$helpers->isEmpty()) {

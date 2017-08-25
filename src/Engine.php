@@ -70,6 +70,7 @@ class Engine
     private $charset = 'UTF-8';
     private $logger;
     private $strictCallables = true;
+    private $strictVariables = false;
     private $pragmas = [];
     private $delimiters;
     private $buggyPropertyShadowing = false;
@@ -170,6 +171,9 @@ class Engine
      *         //
      *         // To disable lambdas and higher order sections entirely, set this to false.
      *         'lambdas' => true,
+     *
+     *         // Treat unknown variables as a failure and throw an exception instead of silently ignoring them.
+     *         'strict_variables' => true,
      *
      *         // Enable pragmas across all templates, regardless of the presence of pragma tags in the individual
      *         // templates.
@@ -313,6 +317,10 @@ class Engine
 
         if (isset($options['strict_callables'])) {
             $this->strictCallables = (bool) $options['strict_callables'];
+        }
+
+        if (isset($options['strict_variables'])) {
+            $this->strictVariables = (bool) $options['strict_variables'];
         }
 
         if (isset($options['buggy_property_shadowing'])) {
@@ -945,7 +953,7 @@ class Engine
         $compiler->setOptions($this->getOptions());
         $compiler->setPragmas($this->getPragmas());
 
-        return $compiler->compile($source, $tree, $name, isset($this->escape), $this->charset, $this->strictCallables, $this->entityFlags);
+        return $compiler->compile($source, $tree, $name, isset($this->escape), $this->charset, $this->strictCallables, $this->entityFlags, $this->strictVariables);
     }
 
     /**
