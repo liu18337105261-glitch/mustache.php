@@ -344,6 +344,78 @@ class InheritanceTest extends TestCase
         );
     }
 
+    public function testInlineParentKeepsTrailingNewline()
+    {
+        $partials = [
+            'parent' => '{{$block}}{{/block}}',
+        ];
+
+        $this->mustache->setPartials($partials);
+
+        $tpl = $this->mustache->loadTemplate(
+            '{{<parent}}{{$block}}x{{/block}}{{/parent}}
+Y'
+        );
+
+        $data = [];
+
+        $this->assertSame(
+            'x
+Y',
+            $tpl->render($data)
+        );
+    }
+
+    public function testStandaloneBlockDedentsIndentedTagLines()
+    {
+        $partials = [
+            'parent' => 'Hi,
+  {{$block}}{{/block}}',
+        ];
+
+        $this->mustache->setPartials($partials);
+
+        $tpl = $this->mustache->loadTemplate(
+            '{{<parent}}{{$block}}
+  {{name}}
+{{/block}}{{/parent}}'
+        );
+
+        $data = ['name' => 'Nineties'];
+
+        $this->assertSame(
+            'Hi,
+  Nineties
+',
+            $tpl->render($data)
+        );
+    }
+
+    public function testStandaloneBlockDedentPreservesSpacingAfterTags()
+    {
+        $partials = [
+            'parent' => 'Hi,
+  {{$block}}{{/block}}',
+        ];
+
+        $this->mustache->setPartials($partials);
+
+        $tpl = $this->mustache->loadTemplate(
+            '{{<parent}}{{$block}}
+  {{name}} suffix
+{{/block}}{{/parent}}'
+        );
+
+        $data = ['name' => 'Nineties'];
+
+        $this->assertSame(
+            'Hi,
+  Nineties suffix
+',
+            $tpl->render($data)
+        );
+    }
+
     public function testOverrideOneSubstitutionButNotTheOther()
     {
         $partials = [

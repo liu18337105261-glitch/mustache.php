@@ -175,6 +175,8 @@ class Compiler
                         $node[Tokenizer::END],
                         $node[Tokenizer::OTAG],
                         $node[Tokenizer::CTAG],
+                        isset($node[Tokenizer::INDENT]) ? $node[Tokenizer::INDENT] : '',
+                        isset($node[Tokenizer::STANDALONE]),
                         $level
                     );
                     break;
@@ -187,6 +189,8 @@ class Compiler
                         $node[Tokenizer::END],
                         $node[Tokenizer::OTAG],
                         $node[Tokenizer::CTAG],
+                        isset($node[Tokenizer::INDENT]) ? $node[Tokenizer::INDENT] : '',
+                        isset($node[Tokenizer::STANDALONE]),
                         $level
                     );
                     break;
@@ -276,7 +280,7 @@ class Compiler
     const BLOCK_VAR = '
         $blockFunction = $context->findInBlock(%s);
         if (is_callable($blockFunction)) {
-            $buffer .= call_user_func($blockFunction, $context);
+            $buffer .= call_user_func($blockFunction, $context, %s);
         %s}
     ';
 
@@ -285,26 +289,29 @@ class Compiler
     /**
      * Generate Mustache Template inheritance block variable PHP source.
      *
-     * @param array  $nodes Array of child tokens
-     * @param string $id    Section name
-     * @param int    $start Section start offset
-     * @param int    $end   Section end offset
-     * @param string $otag  Current Mustache opening tag
-     * @param string $ctag  Current Mustache closing tag
+     * @param array  $nodes      Array of child tokens
+     * @param string $id         Section name
+     * @param int    $start      Section start offset
+     * @param int    $end        Section end offset
+     * @param string $otag       Current Mustache opening tag
+     * @param string $ctag       Current Mustache closing tag
+     * @param string $indent
+     * @param bool   $standalone
      * @param int    $level
      *
      * @return string Generated PHP source code
      */
-    private function blockVar(array $nodes, $id, $start, $end, $otag, $ctag, $level)
+    private function blockVar(array $nodes, $id, $start, $end, $otag, $ctag, $indent, $standalone, $level)
     {
         $id = var_export($id, true);
+        $indent = $this->getBlockIndentExpression($nodes, $indent, $standalone);
 
         $else = $this->walk($nodes, $level);
         if ($else !== '') {
             $else = sprintf($this->prepare(self::BLOCK_VAR_ELSE, $level + 1, false, true), $else);
         }
 
-        return sprintf($this->prepare(self::BLOCK_VAR, $level), $id, $else);
+        return sprintf($this->prepare(self::BLOCK_VAR, $level), $id, $indent, $else);
     }
 
     const BLOCK_ARG = '%s => [$this, \'block%s\'],';
@@ -312,18 +319,24 @@ class Compiler
     /**
      * Generate Mustache Template inheritance block argument PHP source.
      *
-     * @param array  $nodes Array of child tokens
-     * @param string $id    Section name
-     * @param int    $start Section start offset
-     * @param int    $end   Section end offset
-     * @param string $otag  Current Mustache opening tag
-     * @param string $ctag  Current Mustache closing tag
+     * @param array  $nodes      Array of child tokens
+     * @param string $id         Section name
+     * @param int    $start      Section start offset
+     * @param int    $end        Section end offset
+     * @param string $otag       Current Mustache opening tag
+     * @param string $ctag       Current Mustache closing tag
+     * @param string $indent
+     * @param bool   $standalone
      * @param int    $level
      *
      * @return string Generated PHP source code
      */
-    private function blockArg($nodes, $id, $start, $end, $otag, $ctag, $level)
+    private function blockArg($nodes, $id, $start, $end, $otag, $ctag, $indent, $standalone, $level)
     {
+        if ($standalone) {
+            $nodes = $this->dedentNodes($nodes, $this->getCommonIndent($nodes));
+        }
+
         $key = $this->block($nodes);
         $id = var_export($id, true);
 
@@ -331,9 +344,9 @@ class Compiler
     }
 
     const BLOCK_FUNCTION = '
-        public function block%s($context)
+        public function block%s($context, $indent = \'\')
         {
-            $indent = $buffer = \'\';%s
+            $buffer = \'\';%s
 
             return $buffer;
         }
@@ -348,14 +361,234 @@ class Compiler
      */
     private function block(array $nodes)
     {
+        $indentNextLine = $this->indentNextLine;
+        $this->indentNextLine = true;
         $code = $this->walkWithContextFrame($nodes);
-        $key  = ucfirst(md5($code));
+        $this->indentNextLine = $indentNextLine;
+        $key = ucfirst(md5($code));
 
         if (!isset($this->blocks[$key])) {
             $this->blocks[$key] = sprintf($this->prepare(self::BLOCK_FUNCTION, 0), $key, $code);
         }
 
         return $key;
+    }
+
+    /**
+     * Get the PHP expression for indentation to apply to an overridden block.
+     *
+     * Standalone blocks inherit the parent partial's runtime indent and fall
+     * back to the block's intrinsic indentation when no explicit indent is
+     * present on the tag line.
+     *
+     * @param array  $nodes      Block default content
+     * @param string $indent     Explicit indentation from the block tag line
+     * @param bool   $standalone Whether the block tag was standalone
+     *
+     * @return string PHP indentation expression
+     */
+    private function getBlockIndentExpression(array $nodes, $indent, $standalone)
+    {
+        if ($standalone && $indent === '') {
+            $indent = $this->getCommonIndent($nodes);
+        }
+
+        $indent = var_export($indent, true);
+
+        if ($standalone) {
+            return '$indent . ' . $indent;
+        }
+
+        return $indent;
+    }
+
+    /**
+     * Remove a common indentation prefix from a block argument's content.
+     *
+     * @param array  $nodes  Block content
+     * @param string $indent Indentation to remove
+     *
+     * @return array Dedented block content
+     */
+    private function dedentNodes(array $nodes, $indent)
+    {
+        if ($indent === '') {
+            return $nodes;
+        }
+
+        $indentLen = strlen($indent);
+        $atLineStart = true;
+        foreach ($nodes as &$node) {
+            if ($node[Tokenizer::TYPE] === Tokenizer::T_TEXT) {
+                $node[Tokenizer::VALUE] = $this->dedentText($node[Tokenizer::VALUE], $indent, $atLineStart);
+                continue;
+            }
+
+            if ($atLineStart && isset($node[Tokenizer::INDENT]) && substr($node[Tokenizer::INDENT], 0, $indentLen) === $indent) {
+                $node[Tokenizer::INDENT] = substr($node[Tokenizer::INDENT], $indentLen);
+            }
+
+            if (isset($node[Tokenizer::NODES])) {
+                $node[Tokenizer::NODES] = $this->dedentNodes($node[Tokenizer::NODES], $indent);
+            }
+
+            $atLineStart = false;
+        }
+        unset($node);
+
+        return $nodes;
+    }
+
+    /**
+     * Remove indentation from text only when the text starts a rendered line.
+     *
+     * @param string $text
+     * @param string $indent
+     * @param bool   $atLineStart Whether this text starts at the beginning of a rendered line
+     *
+     * @return string Dedented text
+     */
+    private function dedentText($text, $indent, &$atLineStart)
+    {
+        $result = '';
+        $offset = 0;
+        $len = strlen($text);
+        $indentLen = strlen($indent);
+
+        while ($offset < $len) {
+            if ($atLineStart && $indentLen > 0 && substr($text, $offset, $indentLen) === $indent) {
+                $offset += $indentLen;
+            }
+
+            $newline = strpos($text, "\n", $offset);
+            if ($newline === false) {
+                $chunk = substr($text, $offset);
+                $result .= $chunk;
+                if ($chunk !== '') {
+                    $atLineStart = false;
+                }
+                break;
+            }
+
+            $result .= substr($text, $offset, $newline - $offset + 1);
+            $atLineStart = true;
+            $offset = $newline + 1;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Find the common leading indentation of non-empty text lines.
+     *
+     * @param array $nodes Block content
+     *
+     * @return string Common indentation
+     */
+    private function getCommonIndent(array $nodes)
+    {
+        $indent = null;
+        $atLineStart = true;
+        $lineIndent = '';
+
+        foreach ($nodes as $node) {
+            if ($indent === '') {
+                break;
+            }
+
+            if ($node[Tokenizer::TYPE] === Tokenizer::T_TEXT) {
+                $this->measureTextIndent($node[Tokenizer::VALUE], $indent, $atLineStart, $lineIndent);
+                continue;
+            }
+
+            if ($atLineStart) {
+                if ($lineIndent === '' && isset($node[Tokenizer::INDENT])) {
+                    $lineIndent = $node[Tokenizer::INDENT];
+                }
+                $this->measureLineIndent($lineIndent, $indent);
+                $lineIndent = '';
+            }
+
+            $atLineStart = false;
+        }
+
+        return $indent === null ? '' : $indent;
+    }
+
+    /**
+     * Measure common indentation across text content.
+     *
+     * @param string      $text
+     * @param string|null $indent
+     * @param bool        $atLineStart
+     * @param string      $lineIndent
+     */
+    private function measureTextIndent($text, &$indent, &$atLineStart, &$lineIndent)
+    {
+        if ($indent === '') {
+            return;
+        }
+
+        $len = strlen($text);
+        for ($i = 0; $i < $len; $i++) {
+            $char = $text[$i];
+
+            if ($atLineStart) {
+                if ($char === ' ' || $char === "\t") {
+                    $lineIndent .= $char;
+                    continue;
+                }
+
+                if ($char === "\n") {
+                    $lineIndent = '';
+                    continue;
+                }
+
+                $this->measureLineIndent($lineIndent, $indent);
+                $lineIndent = '';
+                $atLineStart = false;
+            }
+
+            if ($char === "\n") {
+                $atLineStart = true;
+                $lineIndent = '';
+            }
+        }
+    }
+
+    /**
+     * Merge a line indentation value into the common indent.
+     *
+     * @param string      $lineIndent
+     * @param string|null $indent
+     */
+    private function measureLineIndent($lineIndent, &$indent)
+    {
+        if ($indent === null) {
+            $indent = $lineIndent;
+        } else {
+            $indent = $this->commonPrefix($indent, $lineIndent);
+        }
+    }
+
+    /**
+     * Find the common prefix shared by two strings.
+     *
+     * @param string $left
+     * @param string $right
+     *
+     * @return string Common prefix
+     */
+    private function commonPrefix($left, $right)
+    {
+        $len = min(strlen($left), strlen($right));
+        for ($i = 0; $i < $len; $i++) {
+            if ($left[$i] !== $right[$i]) {
+                return substr($left, 0, $i);
+            }
+        }
+
+        return substr($left, 0, $len);
     }
 
     const SECTION_CALL = '
@@ -583,14 +816,14 @@ class Compiler
         if ($parent = $this->mustache->loadPartial(%s)) {
             $context->pushBlockContext([%s
             ]);
-            $buffer .= $parent->renderInternal($context, $indent);
+            $buffer .= $parent->renderInternal($context, $indent . %s);
             $context->popBlockContext();
         }
     ';
 
     const PARENT_NO_CONTEXT = '
         if ($parent = $this->mustache->loadPartial(%s)) {
-            $buffer .= $parent->renderInternal($context, $indent);
+            $buffer .= $parent->renderInternal($context, $indent . %s);
         }
     ';
     const PARENT_CACHED = '
@@ -600,7 +833,7 @@ class Compiler
         if ($%s) {
             $context->pushBlockContext([%s
             ]);
-            $buffer .= $%s->renderInternal($context, $indent);
+            $buffer .= $%s->renderInternal($context, $indent . %s);
             $context->popBlockContext();
         }
     ';
@@ -610,7 +843,7 @@ class Compiler
             $%s = $this->mustache->loadPartial(%s);
         }
         if ($%s) {
-            $buffer .= $%s->renderInternal($context, $indent);
+            $buffer .= $%s->renderInternal($context, $indent . %s);
         }
     ';
 
@@ -640,7 +873,8 @@ class Compiler
                     $parent,
                     var_export($id, true),
                     $parent,
-                    $parent
+                    $parent,
+                    var_export($indent, true)
                 );
             }
 
@@ -651,18 +885,20 @@ class Compiler
                 var_export($id, true),
                 $parent,
                 $this->walk($realChildren, $level + 1),
-                $parent
+                $parent,
+                var_export($indent, true)
             );
         }
 
         if (empty($realChildren)) {
-            return sprintf($this->prepare(self::PARENT_NO_CONTEXT, $level), $partialName);
+            return sprintf($this->prepare(self::PARENT_NO_CONTEXT, $level), $partialName, var_export($indent, true));
         }
 
         return sprintf(
             $this->prepare(self::PARENT, $level),
             $partialName,
-            $this->walk($realChildren, $level + 1)
+            $this->walk($realChildren, $level + 1),
+            var_export($indent, true)
         );
     }
 

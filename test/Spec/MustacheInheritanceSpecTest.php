@@ -21,14 +21,6 @@ use Mustache\Test\SpecTestCase;
  */
 class MustacheInheritanceSpecTest extends SpecTestCase
 {
-    private $whitespaceFailures = [
-        'Standalone parent: A parent\'s opening and closing tags need not be on separate lines in order to be standalone',
-        'Standalone block: A block\'s opening and closing tags need not be on separate lines in order to be standalone',
-        'Block reindentation: Block indentation is removed at the site of definition and added at the site of expansion',
-        'Intrinsic indentation: When the block opening tag is standalone, indentation is determined by default content',
-        'Nested block reindentation: Nested blocks are reindented relative to the surrounding block',
-    ];
-
     public static function set_up_before_class()
     {
         self::$mustache = new Engine();
@@ -51,10 +43,6 @@ class MustacheInheritanceSpecTest extends SpecTestCase
      */
     public function testInheritanceSpec($desc, $source, $partials, $data, $expected)
     {
-        if (in_array($desc, $this->whitespaceFailures)) {
-            $this->markTestSkipped('Known whitespace failure: ' . $desc);
-        }
-
         $template = self::loadTemplate($source, $partials);
         $this->assertSame($expected, $template->render($data), $desc);
     }
