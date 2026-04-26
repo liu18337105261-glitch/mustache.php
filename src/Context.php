@@ -20,6 +20,8 @@ class Context
 {
     private $stack      = [];
     private $blockStack = [];
+    private $stackSize = 0;
+    private $blockStackSize = 0;
 
     private $buggyPropertyShadowing = false;
 
@@ -33,6 +35,7 @@ class Context
     {
         if ($context !== null) {
             $this->stack = [$context];
+            $this->stackSize = 1;
         }
 
         $this->buggyPropertyShadowing = $buggyPropertyShadowing;
@@ -45,7 +48,7 @@ class Context
      */
     public function push($value)
     {
-        array_push($this->stack, $value);
+        $this->stack[$this->stackSize++] = $value;
     }
 
     /**
@@ -55,7 +58,7 @@ class Context
      */
     public function pushBlockContext($value)
     {
-        array_push($this->blockStack, $value);
+        $this->blockStack[$this->blockStackSize++] = $value;
     }
 
     /**
@@ -65,7 +68,15 @@ class Context
      */
     public function pop()
     {
-        return array_pop($this->stack);
+        if ($this->stackSize === 0) {
+            return null;
+        }
+
+        $index = --$this->stackSize;
+        $value = $this->stack[$index];
+        unset($this->stack[$index]);
+
+        return $value;
     }
 
     /**
@@ -75,7 +86,15 @@ class Context
      */
     public function popBlockContext()
     {
-        return array_pop($this->blockStack);
+        if ($this->blockStackSize === 0) {
+            return null;
+        }
+
+        $index = --$this->blockStackSize;
+        $value = $this->blockStack[$index];
+        unset($this->blockStack[$index]);
+
+        return $value;
     }
 
     /**
@@ -85,7 +104,7 @@ class Context
      */
     public function last()
     {
-        return end($this->stack);
+        return $this->stackSize === 0 ? false : $this->stack[$this->stackSize - 1];
     }
 
     /**
@@ -105,7 +124,7 @@ class Context
      */
     public function find($id)
     {
-        return $this->findVariableInStack($id, $this->stack);
+        return $this->findVariableInStack($id, $this->stack, $this->stackSize);
     }
 
     /**
@@ -137,15 +156,15 @@ class Context
     public function findDot($id, $strictCallables = false)
     {
         $chunks = explode('.', $id);
-        $first  = array_shift($chunks);
-        $value  = $this->findVariableInStack($first, $this->stack);
+        $chunkCount = count($chunks);
+        $value = $this->findVariableInStack($chunks[0], $this->stack, $this->stackSize);
 
         // This wasn't really a dotted name, so we can just return the value.
-        if (empty($chunks)) {
+        if ($chunkCount === 1) {
             return $value;
         }
 
-        foreach ($chunks as $chunk) {
+        for ($i = 1; $i < $chunkCount; $i++) {
             $isCallable = $strictCallables ? (is_object($value) && is_callable($value)) : (!is_string($value) && is_callable($value));
 
             if ($isCallable) {
@@ -154,7 +173,7 @@ class Context
                 return $value;
             }
 
-            $value = $this->findVariableInStack($chunk, [$value]);
+            $value = $this->findVariableInStack($chunks[$i], [$value], 1);
         }
 
         return $value;
@@ -178,19 +197,19 @@ class Context
     public function findAnchoredDot($id)
     {
         $chunks = explode('.', $id);
-        $first  = array_shift($chunks);
-        if ($first !== '') {
+        if ($chunks[0] !== '') {
             throw new InvalidArgumentException(sprintf('Unexpected id for findAnchoredDot: %s', $id));
         }
 
-        $value  = $this->last();
+        $value = $this->last();
+        $chunkCount = count($chunks);
 
-        foreach ($chunks as $chunk) {
+        for ($i = 1; $i < $chunkCount; $i++) {
             if ($value === '') {
                 return $value;
             }
 
-            $value = $this->findVariableInStack($chunk, [$value]);
+            $value = $this->findVariableInStack($chunks[$i], [$value], 1);
         }
 
         return $value;
@@ -219,56 +238,57 @@ class Context
      *
      * @see Mustache\Context::find
      *
-     * @param string $id    Variable name
-     * @param array  $stack Context stack
+     * @param string $id        Variable name
+     * @param array  $stack     Context stack
+     * @param int    $stackSize Number of frames in $stack
      *
      * @return mixed Variable value, or '' if not found
      */
-    private function findVariableInStack($id, array $stack)
+    private function findVariableInStack($id, array $stack, $stackSize)
     {
-        for ($i = count($stack) - 1; $i >= 0; $i--) {
-            $frame = &$stack[$i];
+        for ($i = $stackSize - 1; $i >= 0; $i--) {
+            $frame = $stack[$i];
 
-            switch (gettype($frame)) {
-                case 'object':
-                    if (!($frame instanceof \Closure)) {
-                        // Note that is_callable() *will not work here*
-                        // See https://github.com/bobthecow/mustache.php/wiki/Magic-Methods
-                        if (method_exists($frame, $id)) {
-                            return $frame->$id();
-                        }
+            if (is_array($frame)) {
+                if (array_key_exists($id, $frame)) {
+                    return $frame[$id];
+                }
 
-                        if (isset($frame->$id)) {
-                            return $frame->$id;
-                        }
+                continue;
+            }
 
-                        // Preserve backwards compatibility with a property shadowing bug in
-                        // Mustache.php <= 2.14.2
-                        // See https://github.com/bobthecow/mustache.php/pull/410
-                        if ($this->buggyPropertyShadowing) {
-                            if ($frame instanceof \ArrayAccess && isset($frame[$id])) {
-                                return $frame[$id];
-                            }
-                        } else {
-                            if (property_exists($frame, $id)) {
-                                $rp = new \ReflectionProperty($frame, $id);
-                                if ($rp->isPublic()) {
-                                    return $frame->$id;
-                                }
-                            }
+            if (!is_object($frame) || $frame instanceof \Closure) {
+                continue;
+            }
 
-                            if ($frame instanceof \ArrayAccess && $frame->offsetExists($id)) {
-                                return $frame[$id];
-                            }
-                        }
+            // Note that is_callable() *will not work here*
+            // See https://github.com/bobthecow/mustache.php/wiki/Magic-Methods
+            if (method_exists($frame, $id)) {
+                return $frame->$id();
+            }
+
+            if (isset($frame->$id)) {
+                return $frame->$id;
+            }
+
+            // Preserve backwards compatibility with a property shadowing bug in
+            // Mustache.php <= 2.14.2
+            // See https://github.com/bobthecow/mustache.php/pull/410
+            if ($this->buggyPropertyShadowing) {
+                if ($frame instanceof \ArrayAccess && isset($frame[$id])) {
+                    return $frame[$id];
+                }
+            } else {
+                if (property_exists($frame, $id)) {
+                    $rp = new \ReflectionProperty($frame, $id);
+                    if ($rp->isPublic()) {
+                        return $frame->$id;
                     }
-                    break;
+                }
 
-                case 'array':
-                    if (array_key_exists($id, $frame)) {
-                        return $frame[$id];
-                    }
-                    break;
+                if ($frame instanceof \ArrayAccess && $frame->offsetExists($id)) {
+                    return $frame[$id];
+                }
             }
         }
 
