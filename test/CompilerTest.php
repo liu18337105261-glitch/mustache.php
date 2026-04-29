@@ -12,6 +12,7 @@
 namespace Mustache\Test;
 
 use Mustache\Compiler;
+use Mustache\Engine;
 use Mustache\Exception\SyntaxException;
 use Mustache\Parser;
 use Mustache\Tokenizer;
@@ -177,6 +178,72 @@ class CompilerTest extends TestCase
         $this->assertNotFalse($load);
         $this->assertNotFalse($loop);
         $this->assertGreaterThan($loop, $load);
+    }
+
+    public function testSinglePlainLookupDoesNotUseContextFrameFastPath()
+    {
+        $compiled = $this->compileSource('{{ name }}');
+
+        $this->assertStringContainsString('$value = $this->resolveValue($context->find(\'name\'), $context);', $compiled);
+        $this->assertFalse(strpos($compiled, '$frame = $context->last();'));
+    }
+
+    public function testRepeatedPlainLookupsUseContextFrameFastPath()
+    {
+        $compiled = $this->compileSource('{{ name }}{{ label }}');
+
+        $hoist = strpos($compiled, '$frame = $context->last();');
+        $name = strpos($compiled, "array_key_exists('name', \$frame)");
+        $label = strpos($compiled, "array_key_exists('label', \$frame)");
+
+        $this->assertNotFalse($hoist);
+        $this->assertNotFalse($name);
+        $this->assertNotFalse($label);
+        $this->assertLessThan($name, $hoist);
+        $this->assertLessThan($label, $hoist);
+    }
+
+    public function testDottedAndCurrentContextLookupsDoNotUseContextFrameFastPath()
+    {
+        $compiled = $this->compileSource('{{ person.name }}{{ . }}');
+
+        $this->assertStringContainsString('$value = $this->resolveValue($context->findDot(\'person.name\'), $context);', $compiled);
+        $this->assertStringContainsString('$value = $this->resolveValue($context->last(), $context);', $compiled);
+        $this->assertFalse(strpos($compiled, '$frame = $context->last();'));
+    }
+
+    public function testSectionBodyContextFrameFastPathIsHoistedAfterPush()
+    {
+        $compiled = $this->compileSource('{{# items }}{{ name }}{{ label }}{{/ items }}');
+
+        $section = strpos($compiled, '$value = $context->find(\'items\');');
+        $push = strpos($compiled, '$context->push($value);');
+        $hoist = strpos($compiled, '$frame = $context->last();');
+        $name = strpos($compiled, "array_key_exists('name', \$frame)");
+
+        $this->assertNotFalse($section);
+        $this->assertNotFalse($push);
+        $this->assertNotFalse($hoist);
+        $this->assertNotFalse($name);
+        $this->assertLessThan($hoist, $push);
+        $this->assertLessThan($name, $hoist);
+    }
+
+    public function testContextFrameFastPathPreservesNullArrayKeys()
+    {
+        $mustache = new Engine();
+        $template = '{{# items }}{{ name }}{{ label }}{{/ items }}';
+        $data = [
+            'name' => 'parent',
+            'items' => [
+                [
+                    'name' => null,
+                    'label' => 'child',
+                ],
+            ],
+        ];
+
+        $this->assertSame('child', $mustache->render($template, $data));
     }
 
     /**

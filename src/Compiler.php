@@ -26,6 +26,7 @@ class Compiler
     private $sections;
     private $blocks;
     private $partialCacheScopes;
+    private $contextFrameScopes;
     private $source;
     private $indentNextLine;
     private $customEscape;
@@ -57,6 +58,7 @@ class Compiler
         $this->sections           = [];
         $this->blocks             = [];
         $this->partialCacheScopes = [];
+        $this->contextFrameScopes = [];
         $this->source             = $source;
         $this->indentNextLine     = true;
         $this->customEscape       = $customEscape;
@@ -260,7 +262,7 @@ class Compiler
      */
     private function writeCode(array $tree, $name)
     {
-        $code     = $this->walk($tree);
+        $code     = $this->walkWithContextFrame($tree);
         $sections = implode("\n", $this->sections);
         $blocks   = implode("\n", $this->blocks);
         $klass    = empty($this->sections) && empty($this->blocks) ? self::KLASS_NO_LAMBDAS : self::KLASS;
@@ -346,8 +348,8 @@ class Compiler
      */
     private function block(array $nodes)
     {
-        $code = $this->walk($nodes, 0);
-        $key = ucfirst(md5($code));
+        $code = $this->walkWithContextFrame($nodes);
+        $key  = ucfirst(md5($code));
 
         if (!isset($this->blocks[$key])) {
             $this->blocks[$key] = sprintf($this->prepare(self::BLOCK_FUNCTION, 0), $key, $code);
@@ -357,7 +359,7 @@ class Compiler
     }
 
     const SECTION_CALL = '
-        $value = $context->%s(%s%s);%s
+        $value = %s;%s
         $buffer .= $this->section%s($context, $indent, $value);
     ';
 
@@ -389,7 +391,7 @@ class Compiler
                 $values = $this->isIterable($value) ? $value : [$value];
                 %s
                 foreach ($values as $value) {
-                    $context->push($value);
+                    $context->push($value);%s
                     %s
                     $context->pop();
                 }
@@ -408,7 +410,7 @@ class Compiler
                 $values = $this->isIterable($value) ? $value : [$value];
                 %s
                 foreach ($values as $value) {
-                    $context->push($value);
+                    $context->push($value);%s
                     %s
                     $context->pop();
                 }
@@ -449,28 +451,31 @@ class Compiler
         $key = ucfirst(md5($delims . "\n" . $source));
 
         if (!isset($this->sections[$key])) {
+            $useContextFrame = $this->hasMultipleContextFrameLookups($nodes);
+
             $this->beginPartialCacheScope();
+            $this->beginContextFrameScope($useContextFrame);
             $sectionBody = $this->walk($nodes, 2);
+            $this->endContextFrameScope();
+            $contextFrameHoist = $useContextFrame ? $this->getContextFrameHoist(3) : '';
             $partialCacheInits = $this->getPartialCacheInitializers();
             $this->endPartialCacheScope();
 
             if ($this->lambdas) {
-                $this->sections[$key] = sprintf($this->prepare(self::SECTION), $key, $callable, $source, $helper, $delims, $partialCacheInits, $sectionBody);
+                $this->sections[$key] = sprintf($this->prepare(self::SECTION), $key, $callable, $source, $helper, $delims, $partialCacheInits, $contextFrameHoist, $sectionBody);
             } else {
-                $this->sections[$key] = sprintf($this->prepare(self::SECTION_NO_LAMBDAS), $key, $partialCacheInits, $sectionBody);
+                $this->sections[$key] = sprintf($this->prepare(self::SECTION_NO_LAMBDAS), $key, $partialCacheInits, $contextFrameHoist, $sectionBody);
             }
         }
 
-        $method  = $this->getFindMethod($id);
-        $id      = var_export($id, true);
-        $findArg = $this->getFindMethodArgs($method);
+        $value = $this->getFindValue($id);
         $filters = $this->getFilters($filters, $level);
 
-        return sprintf($this->prepare(self::SECTION_CALL, $level), $method, $id, $findArg, $filters, $key);
+        return sprintf($this->prepare(self::SECTION_CALL, $level), $value, $filters, $key);
     }
 
     const INVERTED_SECTION = '
-        $value = $context->%s(%s%s);%s
+        $value = %s;%s
         if (empty($value)) {
             %s
         }
@@ -488,12 +493,10 @@ class Compiler
      */
     private function invertedSection(array $nodes, $id, $filters, $level)
     {
-        $method  = $this->getFindMethod($id);
-        $id      = var_export($id, true);
-        $findArg = $this->getFindMethodArgs($method);
+        $value = $this->getFindValue($id);
         $filters = $this->getFilters($filters, $level);
 
-        return sprintf($this->prepare(self::INVERTED_SECTION, $level), $method, $id, $findArg, $filters, $this->walk($nodes, $level));
+        return sprintf($this->prepare(self::INVERTED_SECTION, $level), $value, $filters, $this->walk($nodes, $level));
     }
 
     const DYNAMIC_NAME = '$this->resolveValue($context->%s(%s%s), $context)';
@@ -700,7 +703,7 @@ class Compiler
     /**
      * Register a static partial or parent cache in the current section scope.
      *
-     * @param string $type Partial variable prefix
+     * @param string $type Partial variable prefix ('partial' or 'parent')
      * @param string $id   Partial name
      *
      * @return string Generated variable name
@@ -736,7 +739,7 @@ class Compiler
     }
 
     const VARIABLE = '
-        $value = $this->resolveValue($context->%s(%s%s), $context);%s
+        $value = $this->resolveValue(%s, $context);%s
         $buffer .= %s($value === null ? \'\' : %s);
     ';
 
@@ -752,13 +755,11 @@ class Compiler
      */
     private function variable($id, $filters, $escape, $level)
     {
-        $method  = $this->getFindMethod($id);
-        $id      = ($method !== 'last') ? var_export($id, true) : '';
-        $findArg = $this->getFindMethodArgs($method);
+        $lookup  = $this->getFindValue($id);
         $filters = $this->getFilters($filters, $level);
         $value   = $escape ? $this->getEscape() : '$value';
 
-        return sprintf($this->prepare(self::VARIABLE, $level), $method, $id, $findArg, $filters, $this->flushIndent(), $value);
+        return sprintf($this->prepare(self::VARIABLE, $level), $lookup, $filters, $this->flushIndent(), $value);
     }
 
     const FILTER = '
@@ -859,6 +860,161 @@ class Compiler
         }
 
         return sprintf(self::DEFAULT_ESCAPE, $value, var_export($this->entityFlags, true), var_export($this->charset, true));
+    }
+
+    const CONTEXT_FRAME_HOIST = '
+        $frame = $context->last();
+        if (!is_array($frame)) {
+            $frame = [];
+        }
+    ';
+
+    const CONTEXT_FRAME_LOOKUP = '(array_key_exists(%1$s, $frame) ? $frame[%1$s] : $context->find(%1$s))';
+
+    /**
+     * Walk a subtree with a context frame scope active, prepending the cached-frame
+     * hoist if the subtree has enough plain lookups to benefit from it.
+     *
+     * @param int $level      Walk indent level
+     * @param int $hoistLevel Hoist indent level
+     *
+     * @return string Generated PHP source code
+     */
+    private function walkWithContextFrame(array $tree, $level = 0, $hoistLevel = 1)
+    {
+        $useContextFrame = $this->hasMultipleContextFrameLookups($tree);
+
+        $this->beginContextFrameScope($useContextFrame);
+        $code = $this->walk($tree, $level);
+        $this->endContextFrameScope();
+
+        if ($useContextFrame) {
+            $code = $this->getContextFrameHoist($hoistLevel) . $code;
+        }
+
+        return $code;
+    }
+
+    /**
+     * Push a context frame scope. When $enabled, lookups within this scope inline
+     * a fast path against the cached top frame instead of calling Context::find.
+     *
+     * @param bool $enabled
+     */
+    private function beginContextFrameScope($enabled)
+    {
+        $this->contextFrameScopes[] = $enabled;
+    }
+
+    private function endContextFrameScope()
+    {
+        array_pop($this->contextFrameScopes);
+    }
+
+    /**
+     * @return bool
+     */
+    private function hasContextFrameScope()
+    {
+        return !empty($this->contextFrameScopes) && $this->contextFrameScopes[count($this->contextFrameScopes) - 1];
+    }
+
+    /**
+     * @param int $level
+     *
+     * @return string
+     */
+    private function getContextFrameHoist($level)
+    {
+        return $this->prepare(self::CONTEXT_FRAME_HOIST, $level);
+    }
+
+    /**
+     * Whether this subtree has enough plain context lookups to justify the
+     * cached-frame fast path for a generated function.
+     *
+     * Does not recurse into nodes that emit their own function (sections, partials,
+     * parents); those manage their own context frame scope.
+     *
+     * @return bool
+     */
+    private function hasMultipleContextFrameLookups(array $tree)
+    {
+        $count = 0;
+
+        return $this->hasMoreThanOneContextFrameLookup($tree, $count);
+    }
+
+    /**
+     * Walk a tree until the second plain context lookup is found.
+     *
+     * @param int $count
+     *
+     * @return bool
+     */
+    private function hasMoreThanOneContextFrameLookup(array $tree, &$count)
+    {
+        foreach ($tree as $node) {
+            switch ($node[Tokenizer::TYPE]) {
+                case Tokenizer::T_SECTION:
+                case Tokenizer::T_ESCAPED:
+                case Tokenizer::T_UNESCAPED:
+                case Tokenizer::T_UNESCAPED_2:
+                    if ($this->isContextFrameLookup($node[Tokenizer::NAME]) && ++$count > 1) {
+                        return true;
+                    }
+                    break;
+
+                case Tokenizer::T_INVERTED:
+                    if ($this->isContextFrameLookup($node[Tokenizer::NAME]) && ++$count > 1) {
+                        return true;
+                    }
+                    if ($this->hasMoreThanOneContextFrameLookup($node[Tokenizer::NODES], $count)) {
+                        return true;
+                    }
+                    break;
+
+                case Tokenizer::T_BLOCK_VAR:
+                    if ($this->hasMoreThanOneContextFrameLookup($node[Tokenizer::NODES], $count)) {
+                        return true;
+                    }
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether a variable id can use the cached context frame fast path.
+     *
+     * @param string $id
+     *
+     * @return bool
+     */
+    private function isContextFrameLookup($id)
+    {
+        return $id !== '.' && strpos($id, '.') === false;
+    }
+
+    /**
+     * Generate source for finding a value in the context.
+     *
+     * @param string $id Variable name
+     *
+     * @return string
+     */
+    private function getFindValue($id)
+    {
+        $method = $this->getFindMethod($id);
+
+        if ($method === 'find' && $this->hasContextFrameScope()) {
+            return sprintf(self::CONTEXT_FRAME_LOOKUP, var_export($id, true));
+        }
+
+        $id = ($method !== 'last') ? var_export($id, true) : '';
+
+        return sprintf('$context->%s(%s%s)', $method, $id, $this->getFindMethodArgs($method));
     }
 
     /**
