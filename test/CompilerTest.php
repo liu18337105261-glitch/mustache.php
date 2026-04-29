@@ -168,6 +168,21 @@ class CompilerTest extends TestCase
         $this->assertGreaterThan($loop, $load);
     }
 
+    public function testParentsWithoutIndentPassRuntimeIndent()
+    {
+        $compiled = $this->compileSource('{{< layout }}{{/ layout }}');
+
+        $this->assertStringContainsString('$parent->renderInternal($context, $indent);', $compiled);
+        $this->assertStringNotContainsString('$indent . \'\'', $compiled);
+    }
+
+    public function testParentsWithIndentPassIndentArgument()
+    {
+        $compiled = $this->compileSource("  {{< layout }}\n  {{/ layout }}\n");
+
+        $this->assertStringContainsString('$parent->renderInternal($context, $indent . \'  \');', $compiled);
+    }
+
     public function testStaticParentsInSectionsAreLazyLoadedInsideLoop()
     {
         $compiled = $this->compileSource('{{# items }}{{< layout }}{{$ body }}{{ name }}{{/ body }}{{/ layout }}{{/ items }}');

@@ -389,6 +389,10 @@ class Compiler
      */
     private function getBlockIndentExpression(array $nodes, $indent, $standalone)
     {
+        if ($indent === false) {
+            $indent = '';
+        }
+
         if ($standalone && $indent === '') {
             $indent = $this->getCommonIndent($nodes);
         }
@@ -816,14 +820,14 @@ class Compiler
         if ($parent = $this->mustache->loadPartial(%s)) {
             $context->pushBlockContext([%s
             ]);
-            $buffer .= $parent->renderInternal($context, $indent . %s);
+            $buffer .= $parent->renderInternal($context%s);
             $context->popBlockContext();
         }
     ';
 
     const PARENT_NO_CONTEXT = '
         if ($parent = $this->mustache->loadPartial(%s)) {
-            $buffer .= $parent->renderInternal($context, $indent . %s);
+            $buffer .= $parent->renderInternal($context%s);
         }
     ';
     const PARENT_CACHED = '
@@ -833,7 +837,7 @@ class Compiler
         if ($%s) {
             $context->pushBlockContext([%s
             ]);
-            $buffer .= $%s->renderInternal($context, $indent . %s);
+            $buffer .= $%s->renderInternal($context%s);
             $context->popBlockContext();
         }
     ';
@@ -843,7 +847,7 @@ class Compiler
             $%s = $this->mustache->loadPartial(%s);
         }
         if ($%s) {
-            $buffer .= $%s->renderInternal($context, $indent . %s);
+            $buffer .= $%s->renderInternal($context%s);
         }
     ';
 
@@ -862,6 +866,7 @@ class Compiler
     {
         $realChildren = array_filter($children, [self::class, 'onlyBlockArgs']);
         $partialName = $this->resolveDynamicName($id, $dynamic);
+        $indentParam = $indent !== '' ? sprintf(self::PARTIAL_INDENT, var_export($indent, true)) : ', $indent';
 
         if (!$dynamic && $this->isCachingPartials()) {
             $parent = $this->cachePartial('parent', $id);
@@ -874,7 +879,7 @@ class Compiler
                     var_export($id, true),
                     $parent,
                     $parent,
-                    var_export($indent, true)
+                    $indentParam
                 );
             }
 
@@ -886,19 +891,19 @@ class Compiler
                 $parent,
                 $this->walk($realChildren, $level + 1),
                 $parent,
-                var_export($indent, true)
+                $indentParam
             );
         }
 
         if (empty($realChildren)) {
-            return sprintf($this->prepare(self::PARENT_NO_CONTEXT, $level), $partialName, var_export($indent, true));
+            return sprintf($this->prepare(self::PARENT_NO_CONTEXT, $level), $partialName, $indentParam);
         }
 
         return sprintf(
             $this->prepare(self::PARENT, $level),
             $partialName,
             $this->walk($realChildren, $level + 1),
-            var_export($indent, true)
+            $indentParam
         );
     }
 
