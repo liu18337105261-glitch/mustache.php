@@ -13,6 +13,7 @@ namespace Mustache\Test;
 
 use Mustache\Compiler;
 use Mustache\Exception\SyntaxException;
+use Mustache\Parser;
 use Mustache\Tokenizer;
 
 class CompilerTest extends TestCase
@@ -142,6 +143,42 @@ class CompilerTest extends TestCase
         $compiler->compile('', [[Tokenizer::TYPE => 'invalid']], 'SomeClass');
     }
 
+    public function testStaticPartialsInSectionsAreLazyLoadedInsideLoop()
+    {
+        $compiled = $this->compileSource('{{# items }}{{> row }}{{/ items }}');
+
+        $load = strpos($compiled, '$this->mustache->loadPartial(\'row\')');
+        $loop = strpos($compiled, 'foreach ($values as $value)');
+
+        $this->assertNotFalse($load);
+        $this->assertNotFalse($loop);
+        $this->assertGreaterThan($loop, $load);
+    }
+
+    public function testDynamicPartialsInSectionsAreNotCached()
+    {
+        $compiled = $this->compileSource('{{# items }}{{> *partial }}{{/ items }}');
+
+        $load = strpos($compiled, '$this->mustache->loadPartial($this->resolveValue($context->find(\'partial\'), $context))');
+        $loop = strpos($compiled, 'foreach ($values as $value)');
+
+        $this->assertNotFalse($load);
+        $this->assertNotFalse($loop);
+        $this->assertGreaterThan($loop, $load);
+    }
+
+    public function testStaticParentsInSectionsAreLazyLoadedInsideLoop()
+    {
+        $compiled = $this->compileSource('{{# items }}{{< layout }}{{$ body }}{{ name }}{{/ body }}{{/ layout }}{{/ items }}');
+
+        $load = strpos($compiled, '$this->mustache->loadPartial(\'layout\')');
+        $loop = strpos($compiled, 'foreach ($values as $value)');
+
+        $this->assertNotFalse($load);
+        $this->assertNotFalse($loop);
+        $this->assertGreaterThan($loop, $load);
+    }
+
     /**
      * @param string $value
      */
@@ -151,5 +188,19 @@ class CompilerTest extends TestCase
             Tokenizer::TYPE => Tokenizer::T_TEXT,
             Tokenizer::VALUE => $value,
         ];
+    }
+
+    /**
+     * @param string $source
+     *
+     * @return string
+     */
+    private function compileSource($source)
+    {
+        $compiler = new Compiler();
+        $tokens = (new Tokenizer())->scan($source);
+        $tree = (new Parser())->parse($tokens);
+
+        return $compiler->compile($source, $tree, 'TestTemplate');
     }
 }

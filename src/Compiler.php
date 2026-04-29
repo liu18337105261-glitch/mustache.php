@@ -25,6 +25,7 @@ class Compiler
     private $defaultPragmas = [];
     private $sections;
     private $blocks;
+    private $partialCacheScopes;
     private $source;
     private $indentNextLine;
     private $customEscape;
@@ -52,15 +53,16 @@ class Compiler
      */
     public function compile($source, array $tree, $name, $customEscape = false, $charset = 'UTF-8', $strictCallables = false, $entityFlags = ENT_COMPAT)
     {
-        $this->pragmas         = $this->defaultPragmas;
-        $this->sections        = [];
-        $this->blocks          = [];
-        $this->source          = $source;
-        $this->indentNextLine  = true;
-        $this->customEscape    = $customEscape;
-        $this->entityFlags     = $entityFlags;
-        $this->charset         = $charset;
-        $this->strictCallables = $strictCallables;
+        $this->pragmas            = $this->defaultPragmas;
+        $this->sections           = [];
+        $this->blocks             = [];
+        $this->partialCacheScopes = [];
+        $this->source             = $source;
+        $this->indentNextLine     = true;
+        $this->customEscape       = $customEscape;
+        $this->entityFlags        = $entityFlags;
+        $this->charset            = $charset;
+        $this->strictCallables    = $strictCallables;
 
         $code = $this->writeCode($tree, $name);
 
@@ -385,6 +387,7 @@ class Compiler
 
             if (!empty($value)) {
                 $values = $this->isIterable($value) ? $value : [$value];
+                %s
                 foreach ($values as $value) {
                     $context->push($value);
                     %s
@@ -403,6 +406,7 @@ class Compiler
 
             if (!empty($value)) {
                 $values = $this->isIterable($value) ? $value : [$value];
+                %s
                 foreach ($values as $value) {
                     $context->push($value);
                     %s
@@ -445,10 +449,15 @@ class Compiler
         $key = ucfirst(md5($delims . "\n" . $source));
 
         if (!isset($this->sections[$key])) {
+            $this->beginPartialCacheScope();
+            $sectionBody = $this->walk($nodes, 2);
+            $partialCacheInits = $this->getPartialCacheInitializers();
+            $this->endPartialCacheScope();
+
             if ($this->lambdas) {
-                $this->sections[$key] = sprintf($this->prepare(self::SECTION), $key, $callable, $source, $helper, $delims, $this->walk($nodes, 2));
+                $this->sections[$key] = sprintf($this->prepare(self::SECTION), $key, $callable, $source, $helper, $delims, $partialCacheInits, $sectionBody);
             } else {
-                $this->sections[$key] = sprintf($this->prepare(self::SECTION_NO_LAMBDAS), $key, $this->walk($nodes, 2));
+                $this->sections[$key] = sprintf($this->prepare(self::SECTION_NO_LAMBDAS), $key, $partialCacheInits, $sectionBody);
             }
         }
 
@@ -518,6 +527,15 @@ class Compiler
             $buffer .= $partial->renderInternal($context%s);
         }
     ';
+    const PARTIAL_CACHE_INIT = '$%s = false;';
+    const PARTIAL_CACHED = '
+        if ($%s === false) {
+            $%s = $this->mustache->loadPartial(%s);
+        }
+        if ($%s) {
+            $buffer .= $%s->renderInternal($context%s);
+        }
+    ';
 
     /**
      * Generate Mustache Template partial call PHP source.
@@ -535,6 +553,20 @@ class Compiler
             $indentParam = sprintf(self::PARTIAL_INDENT, var_export($indent, true));
         } else {
             $indentParam = '';
+        }
+
+        if (!$dynamic && $this->isCachingPartials()) {
+            $partial = $this->cachePartial('partial', $id);
+
+            return sprintf(
+                $this->prepare(self::PARTIAL_CACHED, $level),
+                $partial,
+                $partial,
+                var_export($id, true),
+                $partial,
+                $partial,
+                $indentParam
+            );
         }
 
         return sprintf(
@@ -558,6 +590,26 @@ class Compiler
             $buffer .= $parent->renderInternal($context, $indent);
         }
     ';
+    const PARENT_CACHED = '
+        if ($%s === false) {
+            $%s = $this->mustache->loadPartial(%s);
+        }
+        if ($%s) {
+            $context->pushBlockContext([%s
+            ]);
+            $buffer .= $%s->renderInternal($context, $indent);
+            $context->popBlockContext();
+        }
+    ';
+
+    const PARENT_CACHED_NO_CONTEXT = '
+        if ($%s === false) {
+            $%s = $this->mustache->loadPartial(%s);
+        }
+        if ($%s) {
+            $buffer .= $%s->renderInternal($context, $indent);
+        }
+    ';
 
     /**
      * Generate Mustache Template inheritance parent call PHP source.
@@ -574,6 +626,31 @@ class Compiler
     {
         $realChildren = array_filter($children, [self::class, 'onlyBlockArgs']);
         $partialName = $this->resolveDynamicName($id, $dynamic);
+
+        if (!$dynamic && $this->isCachingPartials()) {
+            $parent = $this->cachePartial('parent', $id);
+
+            if (empty($realChildren)) {
+                return sprintf(
+                    $this->prepare(self::PARENT_CACHED_NO_CONTEXT, $level),
+                    $parent,
+                    $parent,
+                    var_export($id, true),
+                    $parent,
+                    $parent
+                );
+            }
+
+            return sprintf(
+                $this->prepare(self::PARENT_CACHED, $level),
+                $parent,
+                $parent,
+                var_export($id, true),
+                $parent,
+                $this->walk($realChildren, $level + 1),
+                $parent
+            );
+        }
 
         if (empty($realChildren)) {
             return sprintf($this->prepare(self::PARENT_NO_CONTEXT, $level), $partialName);
@@ -594,6 +671,68 @@ class Compiler
     private static function onlyBlockArgs(array $node)
     {
         return $node[Tokenizer::TYPE] === Tokenizer::T_BLOCK_ARG;
+    }
+
+    /**
+     * Push a new section-local static partial cache scope.
+     */
+    private function beginPartialCacheScope()
+    {
+        $this->partialCacheScopes[] = [];
+    }
+
+    /**
+     * Pop the current section-local static partial cache scope.
+     */
+    private function endPartialCacheScope()
+    {
+        array_pop($this->partialCacheScopes);
+    }
+
+    /**
+     * @return bool
+     */
+    private function isCachingPartials()
+    {
+        return !empty($this->partialCacheScopes);
+    }
+
+    /**
+     * Register a static partial or parent cache in the current section scope.
+     *
+     * @param string $type Partial variable prefix
+     * @param string $id   Partial name
+     *
+     * @return string Generated variable name
+     */
+    private function cachePartial($type, $id)
+    {
+        $key = $type . ':' . $id;
+        $scope = &$this->partialCacheScopes[count($this->partialCacheScopes) - 1];
+
+        if (!isset($scope[$key])) {
+            $scope[$key] = sprintf('%s%s', $type, ucfirst(md5($key)));
+        }
+
+        return $scope[$key];
+    }
+
+    /**
+     * Generate section-local static partial cache initializer source.
+     *
+     * @return string
+     */
+    private function getPartialCacheInitializers()
+    {
+        $scope = $this->partialCacheScopes[count($this->partialCacheScopes) - 1];
+        $initializer = $this->prepare(self::PARTIAL_CACHE_INIT, 2);
+        $code = '';
+
+        foreach ($scope as $name) {
+            $code .= sprintf($initializer, $name);
+        }
+
+        return $code;
     }
 
     const VARIABLE = '
