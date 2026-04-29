@@ -219,11 +219,12 @@ class Engine
     public function __construct(array $options = [])
     {
         if (isset($options['template_class_prefix'])) {
-            if ((string) $options['template_class_prefix'] === '') {
-                throw new InvalidArgumentException('Mustache Constructor "template_class_prefix" must not be empty');
+            $templateClassPrefix = (string) $options['template_class_prefix'];
+            if (!preg_match('/^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$/', $templateClassPrefix)) {
+                throw new InvalidArgumentException('Mustache Constructor "template_class_prefix" must be a valid PHP class name prefix');
             }
 
-            $this->templateClassPrefix = $options['template_class_prefix'];
+            $this->templateClassPrefix = $templateClassPrefix;
         }
 
         if (isset($options['cache'])) {

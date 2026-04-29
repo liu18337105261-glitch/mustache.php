@@ -169,12 +169,27 @@ class EngineTest extends FunctionalTestCase
         $this->assertNotSame($mustache->getCache(), $mustache->getProtectedLambdaCache());
     }
 
-    public function testEmptyTemplatePrefixThrowsException()
+    /**
+     * @dataProvider getInvalidTemplateClassPrefixes
+     */
+    public function testInvalidTemplatePrefixThrowsException($prefix)
     {
         $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('template_class_prefix');
         new Engine([
-            'template_class_prefix' => '',
+            'template_class_prefix' => $prefix,
         ]);
+    }
+
+    public function getInvalidTemplateClassPrefixes()
+    {
+        return [
+            [''],
+            ['9Mustache_'],
+            ['Mustache-Template_'],
+            ['Mustache\\Template_'],
+            ['A extends \\Mustache\\Template { public function renderInternal(\\Mustache\\Context $context, $indent = "") { return ""; } } echo "PREFIX_INJECTION"; class B'],
+        ];
     }
 
     /**
