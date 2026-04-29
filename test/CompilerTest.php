@@ -251,6 +251,26 @@ class CompilerTest extends TestCase
         $this->assertStringContainsString("strpos(\$value, '<%')", $compiled);
     }
 
+    public function testSectionLambdaSourceUsesTemplateSourceOffsets()
+    {
+        $source = '{{#wrap}}{{name}}{{/wrap}}';
+        $compiled = $this->compileSource($source);
+
+        $this->assertStringContainsString('private static $source = ' . var_export($source, true) . ';', $compiled);
+        $this->assertStringContainsString('$source = substr(self::$source, 9, 8);', $compiled);
+        $this->assertStringNotContainsString('$source = \'{{name}}\';', $compiled);
+    }
+
+    public function testNestedSectionLambdaSourceIsStoredOnce()
+    {
+        $source = '{{#a}}{{#b}}x{{/b}}{{/a}}';
+        $compiled = $this->compileSource($source);
+
+        $this->assertSame(1, substr_count($compiled, var_export($source, true)));
+        $this->assertStringContainsString('$source = substr(self::$source, 6, 13);', $compiled);
+        $this->assertStringContainsString('$source = substr(self::$source, 12, 1);', $compiled);
+    }
+
     public function testContextFrameFastPathPreservesNullArrayKeys()
     {
         $mustache = new Engine();

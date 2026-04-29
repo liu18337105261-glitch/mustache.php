@@ -225,7 +225,7 @@ class Compiler
 
         class %s extends \\Mustache\\Template
         {
-            private $lambdaHelper;%s%s
+            private $lambdaHelper;%s%s%s
 
             public function renderInternal(\\Mustache\\Context $context, $indent = \'\')
             {
@@ -242,7 +242,7 @@ class Compiler
     const KLASS_NO_LAMBDAS = '<?php
 
         class %s extends \\Mustache\\Template
-        {%s%s
+        {%s%s%s
             public function renderInternal(\\Mustache\\Context $context, $indent = \'\')
             {
                 $buffer = \'\';
@@ -255,6 +255,8 @@ class Compiler
     const STRICT_CALLABLE = 'protected $strictCallables = true;';
 
     const NO_LAMBDAS = 'protected $lambdas = false;';
+
+    const SOURCE = 'private static $source = %s;';
 
     /**
      * Generate Mustache Template class PHP source.
@@ -273,8 +275,9 @@ class Compiler
 
         $callable = $this->strictCallables ? $this->prepare(self::STRICT_CALLABLE) : '';
         $lambda   = $this->lambdas ? '' : $this->prepare(self::NO_LAMBDAS);
+        $source   = ($this->lambdas && !empty($this->sections)) ? sprintf($this->prepare(self::SOURCE), var_export($this->source, true)) : '';
 
-        return sprintf($this->prepare($klass, 0, false, true), $name, $callable, $lambda, $code, $sections, $blocks);
+        return sprintf($this->prepare($klass, 0, false, true), $name, $callable, $lambda, $source, $code, $sections, $blocks);
     }
 
     const BLOCK_VAR = '
@@ -606,7 +609,7 @@ class Compiler
             $buffer = \'\';
 
             if (%s) {
-                $source = %s;
+                $source = substr(self::$source, %s, %s);
                 $value = call_user_func($value, $source, %s);
 
                 if ($value instanceof \\Mustache\\RenderedString) {
@@ -673,7 +676,8 @@ class Compiler
      */
     private function section(array $nodes, $id, $filters, $start, $end, $otag, $ctag, $level)
     {
-        $source   = var_export(substr($this->source, $start, $end - $start), true);
+        $source   = substr($this->source, $start, $end - $start);
+        $length   = $end - $start;
         $callable = $this->getCallable();
 
         if ($otag !== '{{' || $ctag !== '}}') {
@@ -701,7 +705,7 @@ class Compiler
             $this->endPartialCacheScope();
 
             if ($this->lambdas) {
-                $this->sections[$key] = sprintf($this->prepare(self::SECTION), $key, $callable, $source, $helper, $otag, $delims, $partialCacheInits, $contextFrameHoist, $sectionBody);
+                $this->sections[$key] = sprintf($this->prepare(self::SECTION), $key, $callable, var_export($start, true), var_export($length, true), $helper, $otag, $delims, $partialCacheInits, $contextFrameHoist, $sectionBody);
             } else {
                 $this->sections[$key] = sprintf($this->prepare(self::SECTION_NO_LAMBDAS), $key, $partialCacheInits, $contextFrameHoist, $sectionBody);
             }
