@@ -127,6 +127,18 @@ class HigherOrderSectionsTest extends FunctionalTestCase
         $this->assertSame('<em>' . $foo->name . '</em>', $tpl->render($foo));
     }
 
+    public function testPassthroughOptimizationHonorsCustomDelimiters()
+    {
+        $tpl = $this->mustache->loadTemplate('{{=<% %>=}}<%#wrap%><%name%><%/wrap%>');
+
+        $foo = new Foo();
+        $foo->wrap = function () {
+            return '<%name%>';
+        };
+
+        $this->assertSame($foo->name, $tpl->render($foo));
+    }
+
     /**
      * @dataProvider cacheLambdaTemplatesData
      */

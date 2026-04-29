@@ -244,6 +244,13 @@ class CompilerTest extends TestCase
         $this->assertLessThan($name, $hoist);
     }
 
+    public function testSectionLambdaPassthroughUsesActiveOpeningDelimiter()
+    {
+        $compiled = $this->compileSource('{{=<% %>=}}<%#wrap%><%name%><%/wrap%>');
+
+        $this->assertStringContainsString("strpos(\$value, '<%')", $compiled);
+    }
+
     public function testContextFrameFastPathPreservesNullArrayKeys()
     {
         $mustache = new Engine();

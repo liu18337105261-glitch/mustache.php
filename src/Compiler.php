@@ -614,7 +614,7 @@ class Compiler
                 }
 
                 if (is_string($value)) {
-                    if (strpos($value, \'{{\') === false) {
+                    if (strpos($value, %s) === false) {
                         return $value;
                     }
 
@@ -680,9 +680,11 @@ class Compiler
             $delimTag = var_export(sprintf('{{= %s %s =}}', $otag, $ctag), true);
             $helper = sprintf('$this->lambdaHelper->withDelimiters(%s)', $delimTag);
             $delims = ', ' . $delimTag;
+            $otag = var_export($otag, true);
         } else {
             $helper = '$this->lambdaHelper';
             $delims = '';
+            $otag = '\'{{\'';
         }
 
         $key = ucfirst(md5($delims . "\n" . $source));
@@ -699,7 +701,7 @@ class Compiler
             $this->endPartialCacheScope();
 
             if ($this->lambdas) {
-                $this->sections[$key] = sprintf($this->prepare(self::SECTION), $key, $callable, $source, $helper, $delims, $partialCacheInits, $contextFrameHoist, $sectionBody);
+                $this->sections[$key] = sprintf($this->prepare(self::SECTION), $key, $callable, $source, $helper, $otag, $delims, $partialCacheInits, $contextFrameHoist, $sectionBody);
             } else {
                 $this->sections[$key] = sprintf($this->prepare(self::SECTION_NO_LAMBDAS), $key, $partialCacheInits, $contextFrameHoist, $sectionBody);
             }
