@@ -35,7 +35,7 @@ use Psr\Log\LoggerInterface;
  */
 class Engine
 {
-    const VERSION      = '3.0.0';
+    const VERSION      = '3.1.0';
     const SPEC_VERSION = '1.4.3';
 
     const PRAGMA_FILTERS       = 'FILTERS';
