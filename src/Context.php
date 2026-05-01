@@ -18,10 +18,10 @@ use Mustache\Exception\InvalidArgumentException;
  */
 class Context
 {
-    private $stack      = [];
-    private $blockStack = [];
-    private $stackSize = 0;
-    private $blockStackSize = 0;
+    private $stack           = [];
+    private $blockScopes     = [[]];
+    private $stackSize       = 0;
+    private $blockScopeIndex = 0;
 
     private $buggyPropertyShadowing = false;
 
@@ -58,7 +58,7 @@ class Context
      */
     public function pushBlockContext($value)
     {
-        $this->blockStack[$this->blockStackSize++] = $value;
+        $this->blockScopes[$this->blockScopeIndex][] = $value;
     }
 
     /**
@@ -86,15 +86,7 @@ class Context
      */
     public function popBlockContext()
     {
-        if ($this->blockStackSize === 0) {
-            return null;
-        }
-
-        $index = --$this->blockStackSize;
-        $value = $this->blockStack[$index];
-        unset($this->blockStack[$index]);
-
-        return $value;
+        return array_pop($this->blockScopes[$this->blockScopeIndex]);
     }
 
     /**
@@ -224,13 +216,39 @@ class Context
      */
     public function findInBlock($id)
     {
-        foreach ($this->blockStack as $context) {
+        foreach ($this->blockScopes[$this->blockScopeIndex] as $context) {
             if (array_key_exists($id, $context)) {
                 return $context[$id];
             }
         }
 
         return '';
+    }
+
+    /**
+     * Start an isolated block context scope.
+     *
+     * Block lookups inside a nested parent partial should not resolve against
+     * block contexts pushed by the surrounding block argument.
+     */
+    public function pushBlockContextScope()
+    {
+        $this->blockScopes[++$this->blockScopeIndex] = [];
+    }
+
+    /**
+     * End the current isolated block context scope, restoring visibility into
+     * the surrounding block context scope.
+     */
+    public function popBlockContextScope()
+    {
+        // The root scope is always kept; popping it would leave findInBlock
+        // with no scope to read.
+        if ($this->blockScopeIndex === 0) {
+            return;
+        }
+
+        unset($this->blockScopes[$this->blockScopeIndex--]);
     }
 
     /**

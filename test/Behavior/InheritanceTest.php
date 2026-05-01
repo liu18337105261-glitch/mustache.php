@@ -468,6 +468,79 @@ Y',
         $this->assertSame('override override override don\'t recurse', $tpl->render($data));
     }
 
+    public function testNestedParentBlocksWithSameNameUseNestedOverride()
+    {
+        $partials = [
+            'base'  => 'base({{$content}}base default{{/content}})',
+            'block' => 'block({{$content}}block default{{/content}})',
+        ];
+
+        $this->mustache->setPartials($partials);
+
+        $tpl = $this->mustache->loadTemplate(
+            '{{<base}}{{$content}}outer {{<block}}{{$content}}inner{{/content}}{{/block}}{{/content}}{{/base}}'
+        );
+
+        $this->assertSame('base(outer block(inner))', $tpl->render([]));
+    }
+
+    public function testNestedParentBlocksWithSameNameFallBackToNestedDefault()
+    {
+        $partials = [
+            'base'  => 'base({{$content}}base default{{/content}})',
+            'block' => 'block({{$content}}block default{{/content}})',
+        ];
+
+        $this->mustache->setPartials($partials);
+
+        $tpl = $this->mustache->loadTemplate(
+            '{{<base}}{{$content}}outer {{<block}}{{/block}}{{/content}}{{/base}}'
+        );
+
+        $this->assertSame('base(outer block(block default))', $tpl->render([]));
+    }
+
+    public function testNestedParentBlocksDoNotInheritOuterBlockContext()
+    {
+        $partials = [
+            'base'  => 'base({{$title}}base title{{/title}}|{{$content}}base default{{/content}})',
+            'block' => 'block({{$title}}block title{{/title}})',
+        ];
+
+        $this->mustache->setPartials($partials);
+
+        $tpl = $this->mustache->loadTemplate(
+            '{{<base}}{{$title}}page title{{/title}}{{$content}}{{<block}}{{/block}}{{/content}}{{/base}}'
+        );
+
+        $this->assertSame('base(page title|block(block title))', $tpl->render([]));
+    }
+
+    public function testTopLevelSubstitutionsTakePrecedenceOverNestedDefaults()
+    {
+        $partials = [
+            'base' => '<html><head><title>{{$title}}My Site{{/title}}</title></head></html>',
+            'page' => '{{<base}}{{$title}}{{page.title}} | My Site{{/title}}{{/base}}',
+        ];
+
+        $this->mustache->setPartials($partials);
+
+        $tpl = $this->mustache->loadTemplate(
+            '{{<page}}{{$title}}{{article.title}} | My Site{{/title}}{{/page}}'
+        );
+
+        $data = [
+            'article' => [
+                'title' => 'Article Title!',
+            ],
+            'page' => [
+                'title' => 'Page Title!',
+            ],
+        ];
+
+        $this->assertSame('<html><head><title>Article Title! | My Site</title></head></html>', $tpl->render($data));
+    }
+
     public function testTopLevelSubstitutionsTakePrecedenceInMultilevelInheritance()
     {
         $partials = [

@@ -33,6 +33,7 @@ class Compiler
     private $entityFlags;
     private $charset;
     private $strictCallables;
+    private $blockContentDepth;
 
     // Optional Mustache specs
     private $lambdas = true;
@@ -65,6 +66,7 @@ class Compiler
         $this->entityFlags        = $entityFlags;
         $this->charset            = $charset;
         $this->strictCallables    = $strictCallables;
+        $this->blockContentDepth  = 0;
 
         $code = $this->writeCode($tree, $name);
 
@@ -366,7 +368,9 @@ class Compiler
     {
         $indentNextLine = $this->indentNextLine;
         $this->indentNextLine = true;
+        $this->blockContentDepth++;
         $code = $this->walkWithContextFrame($nodes);
+        $this->blockContentDepth--;
         $this->indentNextLine = $indentNextLine;
         $key = ucfirst(md5($code));
 
@@ -836,6 +840,25 @@ class Compiler
             $buffer .= $parent->renderInternal($context%s);
         }
     ';
+
+    const PARENT_SCOPED = '
+        if ($parent = $this->mustache->loadPartial(%s)) {
+            $context->pushBlockContextScope();
+            $context->pushBlockContext([%s
+            ]);
+            $buffer .= $parent->renderInternal($context%s);
+            $context->popBlockContextScope();
+        }
+    ';
+
+    const PARENT_SCOPED_NO_CONTEXT = '
+        if ($parent = $this->mustache->loadPartial(%s)) {
+            $context->pushBlockContextScope();
+            $buffer .= $parent->renderInternal($context%s);
+            $context->popBlockContextScope();
+        }
+    ';
+
     const PARENT_CACHED = '
         if ($%s === false) {
             $%s = $this->mustache->loadPartial(%s);
@@ -857,6 +880,30 @@ class Compiler
         }
     ';
 
+    const PARENT_CACHED_SCOPED = '
+        if ($%s === false) {
+            $%s = $this->mustache->loadPartial(%s);
+        }
+        if ($%s) {
+            $context->pushBlockContextScope();
+            $context->pushBlockContext([%s
+            ]);
+            $buffer .= $%s->renderInternal($context%s);
+            $context->popBlockContextScope();
+        }
+    ';
+
+    const PARENT_CACHED_SCOPED_NO_CONTEXT = '
+        if ($%s === false) {
+            $%s = $this->mustache->loadPartial(%s);
+        }
+        if ($%s) {
+            $context->pushBlockContextScope();
+            $buffer .= $%s->renderInternal($context%s);
+            $context->popBlockContextScope();
+        }
+    ';
+
     /**
      * Generate Mustache Template inheritance parent call PHP source.
      *
@@ -874,12 +921,16 @@ class Compiler
         $partialName = $this->resolveDynamicName($id, $dynamic);
         $indentParam = $indent !== '' ? sprintf(self::PARTIAL_INDENT, var_export($indent, true)) : ', $indent';
 
+        // Nested inside a block argument: emit a scoped parent so its block
+        // contexts don't leak out to the surrounding parent's block lookups.
+        $scoped = $this->blockContentDepth > 0;
+
         if (!$dynamic && $this->isCachingPartials()) {
             $parent = $this->cachePartial('parent', $id);
 
             if (empty($realChildren)) {
                 return sprintf(
-                    $this->prepare(self::PARENT_CACHED_NO_CONTEXT, $level),
+                    $this->prepare($scoped ? self::PARENT_CACHED_SCOPED_NO_CONTEXT : self::PARENT_CACHED_NO_CONTEXT, $level),
                     $parent,
                     $parent,
                     var_export($id, true),
@@ -890,7 +941,7 @@ class Compiler
             }
 
             return sprintf(
-                $this->prepare(self::PARENT_CACHED, $level),
+                $this->prepare($scoped ? self::PARENT_CACHED_SCOPED : self::PARENT_CACHED, $level),
                 $parent,
                 $parent,
                 var_export($id, true),
@@ -902,11 +953,15 @@ class Compiler
         }
 
         if (empty($realChildren)) {
-            return sprintf($this->prepare(self::PARENT_NO_CONTEXT, $level), $partialName, $indentParam);
+            return sprintf(
+                $this->prepare($scoped ? self::PARENT_SCOPED_NO_CONTEXT : self::PARENT_NO_CONTEXT, $level),
+                $partialName,
+                $indentParam
+            );
         }
 
         return sprintf(
-            $this->prepare(self::PARENT, $level),
+            $this->prepare($scoped ? self::PARENT_SCOPED : self::PARENT, $level),
             $partialName,
             $this->walk($realChildren, $level + 1),
             $indentParam
