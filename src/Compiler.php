@@ -37,6 +37,8 @@ class Compiler
     private $strictCallables;
     private $strictTags;
     private $blockContentDepth;
+    private $debugRendering;
+    private $sourceName;
 
     // Optional Mustache specs
     private $lambdas = true;
@@ -52,12 +54,13 @@ class Compiler
      * @param bool   $customEscape    (default: false)
      * @param string $charset         (default: 'UTF-8')
      * @param bool   $strictCallables (default: false)
-     * @param int    $entityFlags     (default: ENT_COMPAT)
      * @param int    $strictTags      (default: Engine::STRICT_NONE)
+     * @param bool   $debugRendering  (default: false)
+     * @param string $sourceName      Source name for debug rendering frames (default: null)
      *
      * @return string Generated PHP source code
      */
-    public function compile($source, array $tree, $name, $customEscape = false, $charset = 'UTF-8', $strictCallables = false, $entityFlags = ENT_COMPAT, $strictTags = Engine::STRICT_NONE)
+    public function compile($source, array $tree, $name, $customEscape = false, $charset = 'UTF-8', $strictCallables = false, $entityFlags = ENT_COMPAT, $strictTags = Engine::STRICT_NONE, $debugRendering = false, $sourceName = null)
     {
         $this->pragmas            = $this->defaultPragmas;
         $this->sections           = [];
@@ -74,6 +77,8 @@ class Compiler
         $this->strictCallables    = $strictCallables;
         $this->strictTags         = $strictTags;
         $this->blockContentDepth  = 0;
+        $this->debugRendering     = $debugRendering;
+        $this->sourceName         = $sourceName;
 
         $code = $this->writeCode($tree, $name);
 
@@ -130,6 +135,11 @@ class Compiler
         $code = '';
         $level++;
         foreach ($tree as $node) {
+            $debug = $this->debugRendering && $this->isDebuggableNode($node);
+            if ($debug) {
+                $code .= $this->debugEnter($node, $level);
+            }
+
             switch ($node[Tokenizer::TYPE]) {
                 case Tokenizer::T_PRAGMA:
                     $this->pragmas[$node[Tokenizer::NAME]] = true;
@@ -225,9 +235,105 @@ class Compiler
                 default:
                     throw new SyntaxException(sprintf('Unknown token type: %s', $node[Tokenizer::TYPE]), $node);
             }
+
+            if ($debug) {
+                $code .= $this->debugLeave($level);
+            }
         }
 
         return $code;
+    }
+
+    /**
+     * Whether a token should be tracked in the rendering debug stack.
+     *
+     * @return bool
+     */
+    private function isDebuggableNode(array $node)
+    {
+        switch ($node[Tokenizer::TYPE]) {
+            case Tokenizer::T_SECTION:
+            case Tokenizer::T_INVERTED:
+            case Tokenizer::T_PARTIAL:
+            case Tokenizer::T_PARENT:
+            case Tokenizer::T_BLOCK_VAR:
+            case Tokenizer::T_ESCAPED:
+            case Tokenizer::T_UNESCAPED:
+            case Tokenizer::T_UNESCAPED_2:
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    const DEBUG_ENTER = '$context->pushRenderingFrame(%s);';
+    const DEBUG_LEAVE = '$context->popRenderingFrame();';
+
+    /**
+     * Generate rendering debug stack enter source.
+     *
+     * @return string
+     */
+    private function debugEnter(array $node, $level)
+    {
+        return sprintf($this->prepare(self::DEBUG_ENTER, $level), $this->exportDebugFrame($this->getDebugFrame($node)));
+    }
+
+    /**
+     * Generate rendering debug stack leave source.
+     *
+     * @return string
+     */
+    private function debugLeave($level)
+    {
+        return $this->prepare(self::DEBUG_LEAVE, $level);
+    }
+
+    /**
+     * Build a Mustache debug frame for a token.
+     *
+     * @return array
+     */
+    private function getDebugFrame(array $node)
+    {
+        $frame = [
+            'type' => Tokenizer::getTagName($node[Tokenizer::TYPE]),
+        ];
+
+        if (isset($node[Tokenizer::NAME])) {
+            $frame['name'] = $node[Tokenizer::NAME];
+        }
+
+        if (isset($node[Tokenizer::LINE])) {
+            $frame['line'] = $node[Tokenizer::LINE];
+        }
+
+        if (isset($node[Tokenizer::DYNAMIC]) && $node[Tokenizer::DYNAMIC]) {
+            $frame['dynamic'] = true;
+        }
+
+        if ($this->sourceName !== null) {
+            $frame['source'] = $this->sourceName;
+        }
+
+        return $frame;
+    }
+
+    /**
+     * Export a debug frame as compact PHP source.
+     *
+     * @return string
+     */
+    private function exportDebugFrame(array $frame)
+    {
+        $chunks = [];
+
+        foreach ($frame as $key => $value) {
+            $chunks[] = var_export($key, true) . ' => ' . var_export($value, true);
+        }
+
+        return 'array(' . implode(', ', $chunks) . ')';
     }
 
     const KLASS = '<?php

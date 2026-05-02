@@ -19,6 +19,7 @@ class_alias(\Mustache\Engine::class, \Mustache_Engine::class);
 class_alias(\Mustache\Exception::class, \Mustache_Exception::class);
 class_alias(\Mustache\Exception\InvalidArgumentException::class, \Mustache_Exception_InvalidArgumentException::class);
 class_alias(\Mustache\Exception\LogicException::class, \Mustache_Exception_LogicException::class);
+class_alias(\Mustache\Exception\RenderingException::class, \Mustache_Exception_RenderingException::class);
 class_alias(\Mustache\Exception\RuntimeException::class, \Mustache_Exception_RuntimeException::class);
 class_alias(\Mustache\Exception\SyntaxException::class, \Mustache_Exception_SyntaxException::class);
 class_alias(\Mustache\Exception\UnknownBlockException::class, \Mustache_Exception_UnknownBlockException::class);
@@ -125,6 +126,13 @@ if (!class_exists(\Mustache_Exception_LogicException::class)) {
 if (!class_exists(\Mustache_Exception_RuntimeException::class)) {
     /** @deprecated use Mustache\Exception\RuntimeException */
     class Mustache_Exception_RuntimeException extends \Mustache\Exception\RuntimeException
+    {
+    }
+}
+
+if (!class_exists(\Mustache_Exception_RenderingException::class)) {
+    /** @deprecated use Mustache\Exception\RenderingException */
+    class Mustache_Exception_RenderingException extends \Mustache\Exception\RenderingException
     {
     }
 }

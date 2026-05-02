@@ -86,6 +86,7 @@ class Engine
     private $pragmas = [];
     private $delimiters;
     private $buggyPropertyShadowing = false;
+    private $debugRendering = false;
 
     // Optional Mustache specs
     private $dynamicNames = true;
@@ -153,6 +154,10 @@ class Engine
      *
      *         // Character set for `htmlspecialchars`. Defaults to 'UTF-8'. Use 'UTF-8'.
      *         'charset' => 'ISO-8859-1',
+     *
+     *         // Enable extra rendering debug context in generated templates. When enabled, rendering exceptions will
+     *         // include the Mustache tag stack that was active when rendering failed.
+     *         'debug_rendering' => true,
      *
      *         // A Mustache Logger instance. No logging will occur unless this is set. Using a PSR-3 compatible
      *         // logging library -- such as Monolog -- is highly recommended. A simple stream logger implementation is
@@ -293,6 +298,10 @@ class Engine
             $this->charset = $options['charset'];
         }
 
+        if (isset($options['debug_rendering'])) {
+            $this->debugRendering = (bool) $options['debug_rendering'];
+        }
+
         if (isset($options['logger'])) {
             $this->setLogger($options['logger']);
         }
@@ -406,6 +415,16 @@ class Engine
     public function getDoubleRenderLambdas()
     {
         return $this->doubleRenderLambdas;
+    }
+
+    /**
+     * Check whether rendering debug context is enabled.
+     *
+     * @return bool
+     */
+    public function getDebugRendering()
+    {
+        return $this->debugRendering;
     }
 
     /**
@@ -765,10 +784,9 @@ class Engine
      * the same template could be parsed and compiled multiple different ways.
      *
      * @param string|Source $source
-     *
      * @return string Mustache Template class name
      */
-    public function getTemplateClassName($source)
+    public function getTemplateClassName($source, $sourceName = null)
     {
         // For the most part, adding a new option here should do the trick.
         //
@@ -780,6 +798,7 @@ class Engine
         // Keep this list in alphabetical order :)
         $chunks = [
             'charset'         => $this->charset,
+            'debugRendering'  => $this->debugRendering,
             'delimiters'      => $this->delimiters ?: '{{ }}',
             'entityFlags'     => $this->entityFlags,
             'escape'          => isset($this->escape) ? 'custom' : 'default',
@@ -790,6 +809,10 @@ class Engine
             'strictTags'      => $this->strictTags,
             'version'         => self::VERSION,
         ];
+
+        if ($this->debugRendering && $sourceName !== null) {
+            $chunks['debugSource'] = $sourceName;
+        }
 
         $key = json_encode($chunks);
 
@@ -811,7 +834,10 @@ class Engine
      */
     public function loadTemplate($name)
     {
-        return $this->loadSource($this->getLoader()->load($name));
+        $loader = $this->getLoader();
+        $sourceName = $loader instanceof StringLoader ? null : $name;
+
+        return $this->loadSource($loader->load($name), null, $sourceName);
     }
 
     /**
@@ -838,7 +864,7 @@ class Engine
                 throw new UnknownTemplateException($name);
             }
 
-            return $this->loadSource($loader->load($name));
+            return $this->loadSource($loader->load($name), null, $name);
         } catch (UnknownTemplateException $e) {
             if ($strict) {
                 throw $e;
@@ -870,7 +896,7 @@ class Engine
             $source = $delims . "\n" . $source;
         }
 
-        return $this->loadSource($source, $this->getLambdaCache());
+        return $this->loadSource($source, $this->getLambdaCache(), 'lambda');
     }
 
     /**
@@ -884,13 +910,14 @@ class Engine
      * @see Mustache\Engine::loadLambda
      *
      * @param string|Source $source
-     * @param Cache         $cache  (default: null)
+     * @param Cache         $cache      (default: null)
+     * @param string        $sourceName (default: null)
      *
      * @return Template
      */
-    private function loadSource($source, $cache = null)
+    private function loadSource($source, $cache = null, $sourceName = null)
     {
-        $className = $this->getTemplateClassName($source);
+        $className = $this->getTemplateClassName($source, $sourceName);
 
         if (!isset($this->templates[$className])) {
             if ($cache === null || !$cache instanceof Cache) {
@@ -899,7 +926,7 @@ class Engine
 
             if (!class_exists($className, false)) {
                 if (!$cache->load($className)) {
-                    $compiled = $this->compile($source);
+                    $compiled = $this->compile($source, $className, $sourceName);
                     $cache->cache($className, $compiled);
                 }
             }
@@ -954,13 +981,13 @@ class Engine
      * @see Mustache\Compiler::compile
      *
      * @param string|Source $source
+     * @param string        $name       Template class name
+     * @param string        $sourceName Source name for debug rendering frames (default: null)
      *
      * @return string generated Mustache template class code
      */
-    private function compile($source)
+    private function compile($source, $name, $sourceName = null)
     {
-        $name = $this->getTemplateClassName($source);
-
         $this->log(
             Logger::INFO,
             'Compiling template to "{className}" class',
@@ -976,7 +1003,7 @@ class Engine
         $compiler->setOptions($this->getOptions());
         $compiler->setPragmas($this->getPragmas());
 
-        return $compiler->compile($source, $tree, $name, isset($this->escape), $this->charset, $this->strictCallables, $this->entityFlags, $this->strictTags);
+        return $compiler->compile($source, $tree, $name, isset($this->escape), $this->charset, $this->strictCallables, $this->entityFlags, $this->strictTags, $this->debugRendering, $sourceName);
     }
 
     private static function normalizeStrictTags($strictTags)

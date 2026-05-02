@@ -24,6 +24,8 @@ class Context
     private $stackSize        = 0;
     private $blockScopes      = [[]];
     private $blockScopeIndex  = 0;
+    private $renderingStack   = [];
+    private $renderingStackSize = 0;
 
     private $buggyPropertyShadowing = false;
 
@@ -91,6 +93,52 @@ class Context
     public function popBlockContext()
     {
         return array_pop($this->blockScopes[$this->blockScopeIndex]);
+    }
+
+    /**
+     * Push a rendering debug frame onto the stack.
+     *
+     * This is used by debug-compiled templates to preserve the current Mustache
+     * tag context if rendering fails.
+     */
+    public function pushRenderingFrame(array $frame)
+    {
+        $this->renderingStack[$this->renderingStackSize++] = $frame;
+    }
+
+    /**
+     * Pop the last rendering debug frame from the stack.
+     */
+    public function popRenderingFrame()
+    {
+        if ($this->renderingStackSize === 0) {
+            return null;
+        }
+
+        $index = --$this->renderingStackSize;
+        $value = $this->renderingStack[$index];
+        unset($this->renderingStack[$index]);
+
+        return $value;
+    }
+
+    /**
+     * Get the current rendering debug stack.
+     *
+     * @return array
+     */
+    public function getRenderingStack()
+    {
+        return $this->renderingStack;
+    }
+
+    /**
+     * Clear the rendering debug stack.
+     */
+    public function clearRenderingStack()
+    {
+        $this->renderingStack = [];
+        $this->renderingStackSize = 0;
     }
 
     /**

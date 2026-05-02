@@ -318,6 +318,33 @@ class CompilerTest extends TestCase
         $this->assertStringContainsString('$this->mustache->loadPartial(\'layout\', true)', $compiled);
     }
 
+    public function testDebugRenderingCompileTemplateFrames()
+    {
+        $compiled = $this->compileSource('{{# items }}{{ name }}{{/ items }}', Engine::STRICT_NONE, true);
+
+        $this->assertStringContainsString('$context->pushRenderingFrame(array(', $compiled);
+        $this->assertStringContainsString('\'type\' => \'section\'', $compiled);
+        $this->assertStringContainsString('\'type\' => \'variable\'', $compiled);
+        $this->assertStringContainsString('$context->popRenderingFrame();', $compiled);
+    }
+
+    public function testDefaultCompileTemplateDoesNotIncludeDebugFrames()
+    {
+        $compiled = $this->compileSource('{{ name }}');
+
+        $this->assertStringNotContainsString('pushRenderingFrame', $compiled);
+        $this->assertStringNotContainsString('popRenderingFrame', $compiled);
+    }
+
+    public function testDebugRenderingDoesNotInstrumentBlockArgumentsInsideArrays()
+    {
+        $compiled = $this->compileSource('{{< layout }}{{$ title }}{{ name }}{{/ title }}{{/ layout }}', Engine::STRICT_NONE, true);
+
+        $this->assertStringContainsString('$context->pushBlockContext([', $compiled);
+        $this->assertStringContainsString("'title' => [\$this, 'block", $compiled);
+        $this->assertStringNotContainsString("\$context->pushBlockContext([\n            \$context->pushRenderingFrame", $compiled);
+    }
+
     /**
      * @param string $value
      */
@@ -334,12 +361,12 @@ class CompilerTest extends TestCase
      *
      * @return string
      */
-    private function compileSource($source, $strictTags = Engine::STRICT_NONE)
+    private function compileSource($source, $strictTags = Engine::STRICT_NONE, $debugRendering = false)
     {
         $compiler = new Compiler();
         $tokens = (new Tokenizer())->scan($source);
         $tree = (new Parser())->parse($tokens);
 
-        return $compiler->compile($source, $tree, 'TestTemplate', false, 'UTF-8', false, ENT_COMPAT, $strictTags);
+        return $compiler->compile($source, $tree, 'TestTemplate', false, 'UTF-8', false, ENT_COMPAT, $strictTags, $debugRendering);
     }
 }

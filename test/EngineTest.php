@@ -16,6 +16,7 @@ use Mustache\Cache\NoopCache;
 use Mustache\Compiler;
 use Mustache\Engine;
 use Mustache\Exception\InvalidArgumentException;
+use Mustache\Exception\RenderingException;
 use Mustache\Exception\RuntimeException;
 use Mustache\Loader\ArrayLoader;
 use Mustache\Loader\ProductionFilesystemLoader;
@@ -356,6 +357,56 @@ class EngineTest extends FunctionalTestCase
         list($name, $mustache) = $this->getLoggedMustache(Logger::WARNING);
         $mustache->render('{{ foo }}', ['foo' => 'FOO']);
         $this->assertStringContainsString('WARNING: Template cache disabled, evaluating', file_get_contents($name));
+    }
+
+    public function testDebugRenderingExceptionIncludesRenderingStack()
+    {
+        $mustache = new Engine([
+            'debug_rendering' => true,
+            'loader' => new ArrayLoader([
+                'main' => '{{# items }}{{> row }}{{/ items }}',
+            ]),
+            'partials' => [
+                'row' => '{{ bad }}',
+            ],
+            'escape' => function ($value) {
+                if (is_array($value)) {
+                    throw new \RuntimeException('array value');
+                }
+
+                return $value;
+            },
+        ]);
+
+        try {
+            $mustache->loadTemplate('main')->render([
+                'items' => [
+                    ['bad' => []],
+                ],
+            ]);
+        } catch (RenderingException $e) {
+            $frames = $e->getFrames();
+
+            $this->assertCount(3, $frames);
+            $this->assertSame('section', $frames[0]['type']);
+            $this->assertSame('items', $frames[0]['name']);
+            $this->assertSame('main', $frames[0]['source']);
+            $this->assertSame('partial', $frames[1]['type']);
+            $this->assertSame('row', $frames[1]['name']);
+            $this->assertSame('main', $frames[1]['source']);
+            $this->assertSame('variable', $frames[2]['type']);
+            $this->assertSame('bad', $frames[2]['name']);
+            $this->assertSame('row', $frames[2]['source']);
+
+            $this->assertStringContainsString('Error rendering variable "bad" on line 0 of row: array value', $e->getMessage());
+            $this->assertStringContainsString('while rendering partial "row" on line 0 of main', $e->getMessage());
+            $this->assertStringContainsString('while rendering section "items" on line 0 of main', $e->getMessage());
+            $this->assertInstanceOf(\RuntimeException::class, $e->getPrevious());
+
+            return;
+        }
+
+        $this->fail('Expected RenderingException');
     }
 
     public function testLoggingIsNotTooAnnoying()

@@ -11,6 +11,7 @@
 
 namespace Mustache;
 
+use Mustache\Exception\RenderingException;
 use Mustache\Exception\UnknownBlockException;
 
 /**
@@ -85,9 +86,19 @@ abstract class Template
      */
     public function render($context = [])
     {
-        return $this->renderInternal(
-            $this->prepareContextStack($context)
-        );
+        $context = $this->prepareContextStack($context);
+
+        if (!$this->mustache->getDebugRendering()) {
+            return $this->renderInternal($context);
+        }
+
+        try {
+            return $this->renderInternal($context);
+        } catch (\Exception $e) {
+            throw RenderingException::fromDebugContext($e, $context);
+        } catch (\Throwable $e) {
+            throw RenderingException::fromDebugContext($e, $context);
+        }
     }
 
     /**
