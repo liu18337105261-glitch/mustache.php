@@ -784,6 +784,8 @@ class Engine
      * the same template could be parsed and compiled multiple different ways.
      *
      * @param string|Source $source
+     * @param string        $sourceName Source name for debug rendering frames (default: null)
+     *
      * @return string Mustache Template class name
      */
     public function getTemplateClassName($source, $sourceName = null)
@@ -1003,10 +1005,18 @@ class Engine
         $compiler->setOptions($this->getOptions());
         $compiler->setPragmas($this->getPragmas());
 
-        return $compiler->compile($source, $tree, $name, isset($this->escape), $this->charset, $this->strictCallables, $this->entityFlags, $this->strictTags, $this->debugRendering, $sourceName);
+        return $compiler->compile($source, $tree, $name, new CompileOptions([
+            'custom_escape'    => isset($this->escape),
+            'charset'          => $this->charset,
+            'debug_rendering'  => $this->debugRendering,
+            'entity_flags'     => $this->entityFlags,
+            'source_name'      => $sourceName,
+            'strict_callables' => $this->strictCallables,
+            'strict_tags'      => $this->strictTags,
+        ]));
     }
 
-    private static function normalizeStrictTags($strictTags)
+    public static function normalizeStrictTags($strictTags)
     {
         if ($strictTags === true) {
             return self::STRICT_ALL;

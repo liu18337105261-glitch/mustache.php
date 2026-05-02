@@ -11,6 +11,7 @@
 
 namespace Mustache\Test;
 
+use Mustache\CompileOptions;
 use Mustache\Compiler;
 use Mustache\Engine;
 use Mustache\Exception\SyntaxException;
@@ -367,6 +368,9 @@ class CompilerTest extends TestCase
         $tokens = (new Tokenizer())->scan($source);
         $tree = (new Parser())->parse($tokens);
 
-        return $compiler->compile($source, $tree, 'TestTemplate', false, 'UTF-8', false, ENT_COMPAT, $strictTags, $debugRendering);
+        return $compiler->compile($source, $tree, 'TestTemplate', new CompileOptions([
+            'debug_rendering'  => $debugRendering,
+            'strict_tags'      => $strictTags,
+        ]));
     }
 }

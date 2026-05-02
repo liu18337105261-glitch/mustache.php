@@ -30,15 +30,9 @@ class Compiler
     private $partialCacheScopes;
     private $contextFrameScopes;
     private $source;
+    private $options;
     private $indentNextLine;
-    private $customEscape;
-    private $entityFlags;
-    private $charset;
-    private $strictCallables;
-    private $strictTags;
     private $blockContentDepth;
-    private $debugRendering;
-    private $sourceName;
 
     // Optional Mustache specs
     private $lambdas = true;
@@ -48,19 +42,25 @@ class Compiler
      *
      * @throws InvalidArgumentException if the FILTERS pragma is set but lambdas are not enabled
      *
-     * @param string $source          Mustache Template source code
-     * @param array  $tree            Parse tree of Mustache tokens
-     * @param string $name            Mustache Template class name
-     * @param bool   $customEscape    (default: false)
-     * @param string $charset         (default: 'UTF-8')
-     * @param bool   $strictCallables (default: false)
-     * @param int    $strictTags      (default: Engine::STRICT_NONE)
-     * @param bool   $debugRendering  (default: false)
-     * @param string $sourceName      Source name for debug rendering frames (default: null)
+     * The canonical signature is:
+     *
+     *     compile($source, $tree, $name, CompileOptions $options)
+     *
+     * The remaining arguments preserve the pre-3.2 positional signature:
+     *
+     *     compile($source, $tree, $name, $customEscape, $charset, $strictCallables, $entityFlags)
+     *
+     * @param string              $source                Mustache Template source code
+     * @param array               $tree                  Parse tree of Mustache tokens
+     * @param string              $name                  Mustache Template class name
+     * @param CompileOptions|bool $optionsOrCustomEscape Compile options, or legacy custom escape flag (default: false)
+     * @param string              $charset               Legacy charset argument (default: 'UTF-8')
+     * @param bool                $strictCallables       Legacy strict callables argument (default: false)
+     * @param int                 $entityFlags           Legacy entity flags argument (default: ENT_COMPAT)
      *
      * @return string Generated PHP source code
      */
-    public function compile($source, array $tree, $name, $customEscape = false, $charset = 'UTF-8', $strictCallables = false, $entityFlags = ENT_COMPAT, $strictTags = Engine::STRICT_NONE, $debugRendering = false, $sourceName = null)
+    public function compile($source, array $tree, $name, $optionsOrCustomEscape = false, $charset = 'UTF-8', $strictCallables = false, $entityFlags = ENT_COMPAT)
     {
         $this->pragmas            = $this->defaultPragmas;
         $this->sections           = [];
@@ -70,15 +70,16 @@ class Compiler
         $this->partialCacheScopes = [];
         $this->contextFrameScopes = [];
         $this->source             = $source;
+        $this->options            = $optionsOrCustomEscape instanceof CompileOptions
+            ? $optionsOrCustomEscape
+            : new CompileOptions([
+                'custom_escape'    => $optionsOrCustomEscape,
+                'charset'          => $charset,
+                'strict_callables' => $strictCallables,
+                'entity_flags'     => $entityFlags,
+            ]);
         $this->indentNextLine     = true;
-        $this->customEscape       = $customEscape;
-        $this->entityFlags        = $entityFlags;
-        $this->charset            = $charset;
-        $this->strictCallables    = $strictCallables;
-        $this->strictTags         = $strictTags;
         $this->blockContentDepth  = 0;
-        $this->debugRendering     = $debugRendering;
-        $this->sourceName         = $sourceName;
 
         $code = $this->writeCode($tree, $name);
 
@@ -135,7 +136,7 @@ class Compiler
         $code = '';
         $level++;
         foreach ($tree as $node) {
-            $debug = $this->debugRendering && $this->isDebuggableNode($node);
+            $debug = $this->options->debugRendering && $this->isDebuggableNode($node);
             if ($debug) {
                 $code .= $this->debugEnter($node, $level);
             }
@@ -313,8 +314,8 @@ class Compiler
             $frame['dynamic'] = true;
         }
 
-        if ($this->sourceName !== null) {
-            $frame['source'] = $this->sourceName;
+        if ($this->options->sourceName !== null) {
+            $frame['source'] = $this->options->sourceName;
         }
 
         return $frame;
@@ -410,12 +411,12 @@ class Compiler
             $properties[] = $this->prepare(self::LAMBDA_HELPER);
         }
 
-        if ($this->strictCallables) {
+        if ($this->options->strictCallables) {
             $properties[] = $this->prepare(self::STRICT_CALLABLE);
         }
 
-        if ($this->strictTags !== Engine::STRICT_NONE) {
-            $properties[] = sprintf($this->prepare(self::STRICT_TAGS), $this->strictTags);
+        if ($this->options->strictTags !== Engine::STRICT_NONE) {
+            $properties[] = sprintf($this->prepare(self::STRICT_TAGS), $this->options->strictTags);
         }
 
         if (!empty($this->blockNames)) {
@@ -954,7 +955,7 @@ class Compiler
      */
     private function partial($id, $dynamic, $indent, $level)
     {
-        $loadPartial = ($this->strictTags & Engine::STRICT_PARTIALS) !== 0 ? 'loadPartialStrict' : 'loadPartial';
+        $strictArg = ($this->options->strictTags & Engine::STRICT_PARTIALS) !== 0 ? ', true' : '';
 
         if ($indent !== '') {
             $indentParam = sprintf(self::PARTIAL_INDENT, var_export($indent, true));
@@ -1085,7 +1086,7 @@ class Compiler
 
         $partialName = $this->resolveDynamicName($id, $dynamic, Engine::STRICT_PARENTS);
         $indentParam = $indent !== '' ? sprintf(self::PARTIAL_INDENT, var_export($indent, true)) : ', $indent';
-        $loadPartial = ($this->strictTags & Engine::STRICT_PARENTS) !== 0 ? 'loadPartialStrict' : 'loadPartial';
+        $strictArg = ($this->options->strictTags & Engine::STRICT_PARENTS) !== 0 ? ', true' : '';
 
         // Nested inside a block argument: emit a scoped parent so its block
         // contexts don't leak out to the surrounding parent's block lookups.
@@ -1348,11 +1349,11 @@ class Compiler
      */
     private function getEscape($value = '$value')
     {
-        if ($this->customEscape) {
+        if ($this->options->customEscape) {
             return sprintf(self::CUSTOM_ESCAPE, $value);
         }
 
-        return sprintf(self::DEFAULT_ESCAPE, $value, var_export($this->entityFlags, true), var_export($this->charset, true));
+        return sprintf(self::DEFAULT_ESCAPE, $value, var_export($this->options->entityFlags, true), var_export($this->options->charset, true));
     }
 
     const CONTEXT_FRAME_HOIST = '
@@ -1552,7 +1553,7 @@ class Compiler
      */
     private function getFindMethodArgs($method, $strictTag = Engine::STRICT_NONE)
     {
-        $strict = $this->strictTags !== Engine::STRICT_NONE;
+        $strict = $this->options->strictTags !== Engine::STRICT_NONE;
 
         if ($method === 'find') {
             return $strict ? sprintf(', %d', $strictTag) : '';
@@ -1560,10 +1561,10 @@ class Compiler
 
         if ($method === 'findDot' || $method === 'findAnchoredDot') {
             if (!$strict) {
-                return $this->strictCallables ? ', true' : '';
+                return $this->options->strictCallables ? ', true' : '';
             }
 
-            return sprintf(', %s, %d', $this->strictCallables ? 'true' : 'false', $strictTag);
+            return sprintf(', %s, %d', $this->options->strictCallables ? 'true' : 'false', $strictTag);
         }
 
         return '';
@@ -1581,7 +1582,7 @@ class Compiler
      */
     private function getCallable($variable = '$value')
     {
-        $tpl = $this->strictCallables ? self::STRICT_IS_CALLABLE : self::IS_CALLABLE;
+        $tpl = $this->options->strictCallables ? self::STRICT_IS_CALLABLE : self::IS_CALLABLE;
 
         return sprintf($tpl, $variable, $variable);
     }
