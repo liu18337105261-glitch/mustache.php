@@ -165,7 +165,7 @@ class CountingPartialLoadEngine extends Engine
 {
     private $partialLoadCounts = [];
 
-    public function loadPartial($name)
+    public function loadPartial($name, $strict = false)
     {
         if (!isset($this->partialLoadCounts[$name])) {
             $this->partialLoadCounts[$name] = 0;
@@ -173,7 +173,7 @@ class CountingPartialLoadEngine extends Engine
 
         $this->partialLoadCounts[$name]++;
 
-        return parent::loadPartial($name);
+        return parent::loadPartial($name, $strict);
     }
 
     public function getPartialLoadCount($name)

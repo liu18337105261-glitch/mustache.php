@@ -193,6 +193,27 @@ class EngineTest extends FunctionalTestCase
     }
 
     /**
+     * @dataProvider getInvalidStrictTags
+     */
+    public function testInvalidStrictTagsThrowsException($strictTags)
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('strict_tags');
+        new Engine([
+            'strict_tags' => $strictTags,
+        ]);
+    }
+
+    public function getInvalidStrictTags()
+    {
+        return [
+            ['true'],
+            [[Engine::STRICT_INTERPOLATION]],
+            [Engine::STRICT_ALL << 1],
+        ];
+    }
+
+    /**
      * @dataProvider getBadEscapers
      */
     public function testNonCallableEscapeThrowsException($escape)

@@ -19,22 +19,22 @@ use Mustache\Exception\UnknownVariableException;
  */
 class Context
 {
-    private $stack           = [];
-    private $blockScopes     = [[]];
-    private $stackSize       = 0;
-    private $blockScopeIndex = 0;
+    private $strictTags       = Engine::STRICT_NONE;
+    private $stack            = [];
+    private $stackSize        = 0;
+    private $blockScopes      = [[]];
+    private $blockScopeIndex  = 0;
 
     private $buggyPropertyShadowing = false;
-    private $strictVariables = false;
 
     /**
      * Mustache rendering Context constructor.
      *
      * @param mixed $context                Default rendering context (default: null)
      * @param bool  $buggyPropertyShadowing See Engine::getBuggyPropertyShadowing (default: false)
-     * @param bool  $strictVariables        Throw an exception when a variable is not found (default: false)
+     * @param int   $strictTags             Strict tag bitmask (default: Engine::STRICT_NONE)
      */
-    public function __construct($context = null, $buggyPropertyShadowing = false, $strictVariables = false)
+    public function __construct($context = null, $buggyPropertyShadowing = false, $strictTags = Engine::STRICT_NONE)
     {
         if ($context !== null) {
             $this->stack = [$context];
@@ -42,7 +42,7 @@ class Context
         }
 
         $this->buggyPropertyShadowing = $buggyPropertyShadowing;
-        $this->strictVariables = $strictVariables;
+        $this->strictTags = $strictTags;
     }
 
     /**
@@ -112,15 +112,19 @@ class Context
      *  * If the Context frame is an associative array which contains the key $id, returns the value of that element.
      *  * If the Context frame is an object, this will check first for a public method, then a public property named
      *    $id. Failing both of these, it will try `__isset` and `__get` magic methods.
-     *  * If a value named $id is not found in any Context frame, returns an empty string.
+     *  * If a value named $id is not found in any Context frame, returns an empty string (or throws an
+     *    UnknownVariableException if the relevant strict tag is enabled).
      *
-     * @param string $id Variable name
+     * @param string $id        Variable name
+     * @param int    $strictTag Strict tag responsible for this lookup (default: Engine::STRICT_INTERPOLATION)
      *
      * @return mixed Variable value, or '' if not found
+     *
+     * @throws UnknownVariableException if the relevant strict tag is enabled and the variable is not found
      */
-    public function find($id)
+    public function find($id, $strictTag = Engine::STRICT_INTERPOLATION)
     {
-        return $this->findVariableInStack($id, $this->stack, $this->stackSize);
+        return $this->findVariableInStack($id, $this->stack, $this->stackSize, $strictTag);
     }
 
     /**
@@ -146,14 +150,17 @@ class Context
      *
      * @param string $id              Dotted variable selector
      * @param bool   $strictCallables (default: false)
+     * @param int    $strictTag       Strict tag responsible for this lookup (default: Engine::STRICT_INTERPOLATION)
      *
      * @return mixed Variable value, or '' if not found
+     *
+     * @throws UnknownVariableException if the relevant strict tag is enabled and the variable is not found
      */
-    public function findDot($id, $strictCallables = false)
+    public function findDot($id, $strictCallables = false, $strictTag = Engine::STRICT_INTERPOLATION)
     {
         $chunks = explode('.', $id);
         $chunkCount = count($chunks);
-        $value = $this->findVariableInStack($chunks[0], $this->stack, $this->stackSize);
+        $value = $this->findVariableInStack($chunks[0], $this->stack, $this->stackSize, $strictTag);
 
         // This wasn't really a dotted name, so we can just return the value.
         if ($chunkCount === 1) {
@@ -169,7 +176,7 @@ class Context
                 return $value;
             }
 
-            $value = $this->findVariableInStack($chunks[$i], [$value], 1);
+            $value = $this->findVariableInStack($chunks[$i], [$value], 1, $strictTag);
         }
 
         return $value;
@@ -186,11 +193,15 @@ class Context
      *
      * @throws InvalidArgumentException if given an invalid anchored dot $id
      *
-     * @param string $id Dotted variable selector
+     * @param string $id              Dotted variable selector
+     * @param bool   $strictCallables (default: false)
+     * @param int    $strictTag       Strict tag responsible for this lookup (default: Engine::STRICT_INTERPOLATION)
      *
      * @return mixed Variable value, or '' if not found
+     *
+     * @throws UnknownVariableException if the relevant strict tag is enabled and the variable is not found
      */
-    public function findAnchoredDot($id)
+    public function findAnchoredDot($id, $strictCallables = false, $strictTag = Engine::STRICT_INTERPOLATION)
     {
         $chunks = explode('.', $id);
         if ($chunks[0] !== '') {
@@ -205,7 +216,7 @@ class Context
                 return $value;
             }
 
-            $value = $this->findVariableInStack($chunks[$i], [$value], 1);
+            $value = $this->findVariableInStack($chunks[$i], [$value], 1, $strictTag);
         }
 
         return $value;
@@ -227,6 +238,24 @@ class Context
         }
 
         return '';
+    }
+
+    /**
+     * Get the block override names visible in the current block context scope,
+     * keyed by name for cheap lookup.
+     *
+     * @return bool[]
+     */
+    public function getBlockContextNames()
+    {
+        $names = [];
+        foreach ($this->blockScopes[$this->blockScopeIndex] as $context) {
+            foreach ($context as $id => $value) {
+                $names[$id] = true;
+            }
+        }
+
+        return $names;
     }
 
     /**
@@ -252,7 +281,8 @@ class Context
             return;
         }
 
-        unset($this->blockScopes[$this->blockScopeIndex--]);
+        unset($this->blockScopes[$this->blockScopeIndex]);
+        $this->blockScopeIndex--;
     }
 
     /**
@@ -263,12 +293,13 @@ class Context
      * @param string $id        Variable name
      * @param array  $stack     Context stack
      * @param int    $stackSize Number of frames in $stack
+     * @param int    $strictTag Strict tag responsible for this lookup
      *
      * @return mixed Variable value, or '' if not found
      *
-     * @throws UnknownVariableException if strict variables are enabled and the variable is not found
+     * @throws UnknownVariableException if the relevant strict tag is enabled and the variable is not found
      */
-    private function findVariableInStack($id, array $stack, $stackSize)
+    private function findVariableInStack($id, array $stack, $stackSize, $strictTag)
     {
         for ($i = $stackSize - 1; $i >= 0; $i--) {
             $frame = $stack[$i];
@@ -316,7 +347,7 @@ class Context
             }
         }
 
-        if ($this->strictVariables) {
+        if (($this->strictTags & $strictTag) !== 0) {
             throw new UnknownVariableException($id);
         }
 

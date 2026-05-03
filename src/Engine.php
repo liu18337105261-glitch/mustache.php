@@ -41,6 +41,18 @@ class Engine
     const PRAGMA_FILTERS       = 'FILTERS';
     const PRAGMA_ANCHORED_DOT  = 'ANCHORED-DOT';
 
+    const STRICT_NONE          = 0;
+    const STRICT_INTERPOLATION = 1 << 0;
+    const STRICT_SECTIONS      = 1 << 1;
+    const STRICT_PARTIALS      = 1 << 2;
+    const STRICT_PARENTS       = 1 << 3;
+    const STRICT_EXTRA_BLOCKS  = 1 << 4;
+    const STRICT_ALL = self::STRICT_INTERPOLATION
+        | self::STRICT_SECTIONS
+        | self::STRICT_PARTIALS
+        | self::STRICT_PARENTS
+        | self::STRICT_EXTRA_BLOCKS;
+
     /**
      * @deprecated PRAGMA_BLOCKS is now part of the Mustache spec, and is enabled by default
      */
@@ -70,7 +82,7 @@ class Engine
     private $charset = 'UTF-8';
     private $logger;
     private $strictCallables = true;
-    private $strictVariables = false;
+    private $strictTags = self::STRICT_NONE;
     private $pragmas = [];
     private $delimiters;
     private $buggyPropertyShadowing = false;
@@ -147,8 +159,14 @@ class Engine
      *         // available as well:
      *         'logger' => new \Mustache\Logger\StreamLogger('php://stderr'),
      *
+     *         // Treat missing Mustache tags as a failure and throw an exception instead of silently ignoring them.
+     *         // Set this to true for all strict tag categories, or use an Engine::STRICT_* bitmask.
+     *         // STRICT_EXTRA_BLOCKS validates block overrides only when a concrete parent template is rendered; skipped
+     *         // conditional parent paths do not throw for otherwise unused overrides.
+     *         'strict_tags' => \Mustache\Engine::STRICT_INTERPOLATION | \Mustache\Engine::STRICT_PARTIALS,
      *
-     *         // OPTIONAL MUSTACHE FEATURES:
+     *
+     *         // OPTIONAL MUSTACHE SPEC FEATURES:
      *
      *         // Enable dynamic names. By default, variables and sections like `{{*name}}` will be resolved dynamically.
      *         //
@@ -171,9 +189,6 @@ class Engine
      *         //
      *         // To disable lambdas and higher order sections entirely, set this to false.
      *         'lambdas' => true,
-     *
-     *         // Treat unknown variables as a failure and throw an exception instead of silently ignoring them.
-     *         'strict_variables' => true,
      *
      *         // Enable pragmas across all templates, regardless of the presence of pragma tags in the individual
      *         // templates.
@@ -319,8 +334,8 @@ class Engine
             $this->strictCallables = (bool) $options['strict_callables'];
         }
 
-        if (isset($options['strict_variables'])) {
-            $this->strictVariables = (bool) $options['strict_variables'];
+        if (isset($options['strict_tags'])) {
+            $this->strictTags = self::normalizeStrictTags($options['strict_tags']);
         }
 
         if (isset($options['buggy_property_shadowing'])) {
@@ -772,6 +787,7 @@ class Engine
             'options'         => $this->getOptions(),
             'pragmas'         => $this->getPragmas(),
             'strictCallables' => $this->strictCallables,
+            'strictTags'      => $this->strictTags,
             'version'         => self::VERSION,
         ];
 
@@ -804,11 +820,14 @@ class Engine
      * This is a helper method used internally by Template instances for loading partial templates. You can most likely
      * ignore it completely.
      *
+     * @throws UnknownTemplateException if $strict is true and the partial cannot be loaded
+     *
      * @param string $name
+     * @param bool   $strict If true, throw on missing partials instead of logging and returning null (default: false)
      *
      * @return Template
      */
-    public function loadPartial($name)
+    public function loadPartial($name, $strict = false)
     {
         try {
             if (isset($this->partialsLoader)) {
@@ -821,6 +840,10 @@ class Engine
 
             return $this->loadSource($loader->load($name));
         } catch (UnknownTemplateException $e) {
+            if ($strict) {
+                throw $e;
+            }
+
             // If the named partial cannot be found, log then return null.
             $this->log(
                 Logger::WARNING,
@@ -953,7 +976,28 @@ class Engine
         $compiler->setOptions($this->getOptions());
         $compiler->setPragmas($this->getPragmas());
 
-        return $compiler->compile($source, $tree, $name, isset($this->escape), $this->charset, $this->strictCallables, $this->entityFlags, $this->strictVariables);
+        return $compiler->compile($source, $tree, $name, isset($this->escape), $this->charset, $this->strictCallables, $this->entityFlags, $this->strictTags);
+    }
+
+    private static function normalizeStrictTags($strictTags)
+    {
+        if ($strictTags === true) {
+            return self::STRICT_ALL;
+        }
+
+        if ($strictTags === false) {
+            return self::STRICT_NONE;
+        }
+
+        if (!is_int($strictTags)) {
+            throw new InvalidArgumentException('Mustache Constructor "strict_tags" option must be a boolean or an integer bitmask');
+        }
+
+        if (($strictTags & ~self::STRICT_ALL) !== 0) {
+            throw new InvalidArgumentException(sprintf('Unknown "strict_tags" bitmask: %d', $strictTags));
+        }
+
+        return $strictTags;
     }
 
     /**

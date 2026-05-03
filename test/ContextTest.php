@@ -12,6 +12,7 @@
 namespace Mustache\Test;
 
 use Mustache\Context;
+use Mustache\Engine;
 use Mustache\Exception\InvalidArgumentException;
 use Mustache\Exception\UnknownVariableException;
 
@@ -182,24 +183,34 @@ class ContextTest extends TestCase
         $context->findAnchoredDot('a');
     }
 
-    public function testUnknownVariableThrowsException()
+    public function testUnknownVariableThrowsExceptionWhenStrictInterpolationIsEnabled()
     {
         $this->expectException(UnknownVariableException::class);
+        $this->expectExceptionMessage('Unknown variable: b');
 
-        $context = new Context(null, false, true);
+        $context = new Context(null, false, Engine::STRICT_INTERPOLATION);
         $context->push(['a' => 1]);
         $context->find('b');
     }
 
-    public function testAnchoredDotNotationUnknownVariableThrowsException()
+    public function testUnknownDottedVariableThrowsExceptionWhenStrictInterpolationIsEnabled()
     {
         $this->expectException(UnknownVariableException::class);
+        $this->expectExceptionMessage('Unknown variable: c');
 
-        $context = new Context(null, false, true);
-        $context->push([
-            'a' => ['b' => 1],
-        ]);
-        $context->find('a.c');
+        $context = new Context(null, false, Engine::STRICT_INTERPOLATION);
+        $context->push(['a' => ['b' => 1]]);
+        $context->findDot('a.c');
+    }
+
+    public function testUnknownAnchoredDottedVariableThrowsExceptionWhenStrictInterpolationIsEnabled()
+    {
+        $this->expectException(UnknownVariableException::class);
+        $this->expectExceptionMessage('Unknown variable: c');
+
+        $context = new Context(null, false, Engine::STRICT_INTERPOLATION);
+        $context->push(['a' => ['b' => 1]]);
+        $context->findAnchoredDot('.a.c');
     }
 
     public function testNullArrayValueMasking()

@@ -288,6 +288,36 @@ class CompilerTest extends TestCase
         $this->assertSame('child', $mustache->render($template, $data));
     }
 
+    public function testStrictTagsCompileTemplateFlag()
+    {
+        $compiled = $this->compileSource('{{ name }}', Engine::STRICT_INTERPOLATION);
+
+        $this->assertStringContainsString('protected $strictTags = 1;', $compiled);
+    }
+
+    public function testStrictSectionsCompileLookupFlag()
+    {
+        $compiled = $this->compileSource('{{# missing }}{{ name }}{{/ missing }}', Engine::STRICT_SECTIONS);
+
+        $this->assertStringNotContainsString('catch (\\Mustache\\Exception\\UnknownVariableException $e)', $compiled);
+        $this->assertStringContainsString('$value = $context->find(\'missing\', 2);', $compiled);
+        $this->assertStringContainsString('$buffer .= $this->section', $compiled);
+    }
+
+    public function testStrictPartialsCompileStrictLoader()
+    {
+        $compiled = $this->compileSource('{{> missing }}', Engine::STRICT_PARTIALS);
+
+        $this->assertStringContainsString('$this->mustache->loadPartial(\'missing\', true)', $compiled);
+    }
+
+    public function testStrictParentsCompileStrictLoader()
+    {
+        $compiled = $this->compileSource('{{< layout }}{{/ layout }}', Engine::STRICT_PARENTS);
+
+        $this->assertStringContainsString('$this->mustache->loadPartial(\'layout\', true)', $compiled);
+    }
+
     /**
      * @param string $value
      */
@@ -304,12 +334,12 @@ class CompilerTest extends TestCase
      *
      * @return string
      */
-    private function compileSource($source)
+    private function compileSource($source, $strictTags = Engine::STRICT_NONE)
     {
         $compiler = new Compiler();
         $tokens = (new Tokenizer())->scan($source);
         $tree = (new Parser())->parse($tokens);
 
-        return $compiler->compile($source, $tree, 'TestTemplate');
+        return $compiler->compile($source, $tree, 'TestTemplate', false, 'UTF-8', false, ENT_COMPAT, $strictTags);
     }
 }

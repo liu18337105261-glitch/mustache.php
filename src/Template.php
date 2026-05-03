@@ -11,6 +11,8 @@
 
 namespace Mustache;
 
+use Mustache\Exception\UnknownBlockException;
+
 /**
  * Abstract Mustache Template class.
  *
@@ -29,9 +31,19 @@ abstract class Template
     protected $strictCallables = false;
 
     /**
+     * @var int
+     */
+    protected $strictTags = Engine::STRICT_NONE;
+
+    /**
+     * @var bool[]
+     */
+    protected $blockNames = [];
+
+    /**
      * @var bool
      */
-    protected $strictVariables = false;
+    protected $hasParents = false;
 
     /**
      * @var bool
@@ -90,6 +102,28 @@ abstract class Template
      * @return string Rendered template
      */
     abstract public function renderInternal(Context $context, $indent = '');
+
+    /**
+     * Assert that all visible block overrides are accepted by this template.
+     *
+     * Templates that themselves call into a parent defer validation: each
+     * generated parent call asserts again when (and if) it renders, so unused
+     * overrides surface against the deepest parent that actually runs.
+     *
+     * @throws UnknownBlockException if a block override cannot be matched to a block declaration
+     */
+    public function assertBlockContext(Context $context)
+    {
+        if ($this->hasParents) {
+            return;
+        }
+
+        foreach ($context->getBlockContextNames() as $name => $_) {
+            if (!isset($this->blockNames[$name])) {
+                throw new UnknownBlockException($name);
+            }
+        }
+    }
 
     /**
      * Tests whether a value should be iterated over (e.g. in a section context).
@@ -152,7 +186,7 @@ abstract class Template
      */
     protected function prepareContextStack($context = null)
     {
-        $stack = new Context(null, $this->mustache->getBuggyPropertyShadowing(), $this->strictVariables);
+        $stack = new Context(null, $this->mustache->getBuggyPropertyShadowing(), $this->strictTags);
 
         $helpers = $this->mustache->getHelpers();
         if (!$helpers->isEmpty()) {

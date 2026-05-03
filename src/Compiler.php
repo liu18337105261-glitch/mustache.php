@@ -25,6 +25,8 @@ class Compiler
     private $defaultPragmas = [];
     private $sections;
     private $blocks;
+    private $blockNames;
+    private $hasParents;
     private $partialCacheScopes;
     private $contextFrameScopes;
     private $source;
@@ -33,7 +35,7 @@ class Compiler
     private $entityFlags;
     private $charset;
     private $strictCallables;
-    private $strictVariables;
+    private $strictTags;
     private $blockContentDepth;
 
     // Optional Mustache specs
@@ -51,15 +53,17 @@ class Compiler
      * @param string $charset         (default: 'UTF-8')
      * @param bool   $strictCallables (default: false)
      * @param int    $entityFlags     (default: ENT_COMPAT)
-     * @param bool   $strictVariables (default: false)
+     * @param int    $strictTags      (default: Engine::STRICT_NONE)
      *
      * @return string Generated PHP source code
      */
-    public function compile($source, array $tree, $name, $customEscape = false, $charset = 'UTF-8', $strictCallables = false, $entityFlags = ENT_COMPAT, $strictVariables = false)
+    public function compile($source, array $tree, $name, $customEscape = false, $charset = 'UTF-8', $strictCallables = false, $entityFlags = ENT_COMPAT, $strictTags = Engine::STRICT_NONE)
     {
         $this->pragmas            = $this->defaultPragmas;
         $this->sections           = [];
         $this->blocks             = [];
+        $this->blockNames         = [];
+        $this->hasParents         = false;
         $this->partialCacheScopes = [];
         $this->contextFrameScopes = [];
         $this->source             = $source;
@@ -68,7 +72,7 @@ class Compiler
         $this->entityFlags        = $entityFlags;
         $this->charset            = $charset;
         $this->strictCallables    = $strictCallables;
-        $this->strictVariables    = $strictVariables;
+        $this->strictTags         = $strictTags;
         $this->blockContentDepth  = 0;
 
         $code = $this->writeCode($tree, $name);
@@ -229,9 +233,7 @@ class Compiler
     const KLASS = '<?php
 
         class %s extends \\Mustache\\Template
-        {
-            private $lambdaHelper;%s%s%s%s
-
+        {%s
             public function renderInternal(\\Mustache\\Context $context, $indent = \'\')
             {
                 $this->lambdaHelper = new \\Mustache\\LambdaHelper($this->mustache, $context);
@@ -247,7 +249,7 @@ class Compiler
     const KLASS_NO_LAMBDAS = '<?php
 
         class %s extends \\Mustache\\Template
-        {%s%s%s%s
+        {%s
             public function renderInternal(\\Mustache\\Context $context, $indent = \'\')
             {
                 $buffer = \'\';
@@ -257,9 +259,15 @@ class Compiler
             }
         }';
 
+    const LAMBDA_HELPER = 'private $lambdaHelper;';
+
     const STRICT_CALLABLE = 'protected $strictCallables = true;';
 
-    const STRICT_VARIABLE = 'protected $strictVariables = true;';
+    const STRICT_TAGS = 'protected $strictTags = %d;';
+
+    const BLOCK_NAMES = 'protected $blockNames = %s;';
+
+    const HAS_PARENTS = 'protected $hasParents = true;';
 
     const NO_LAMBDAS = 'protected $lambdas = false;';
 
@@ -280,12 +288,48 @@ class Compiler
         $blocks   = implode("\n", $this->blocks);
         $klass    = empty($this->sections) && empty($this->blocks) ? self::KLASS_NO_LAMBDAS : self::KLASS;
 
-        $callable = $this->strictCallables ? $this->prepare(self::STRICT_CALLABLE) : '';
-        $variable = $this->strictVariables ? $this->prepare(self::STRICT_VARIABLE) : '';
-        $lambda   = $this->lambdas ? '' : $this->prepare(self::NO_LAMBDAS);
-        $source   = ($this->lambdas && !empty($this->sections)) ? sprintf($this->prepare(self::SOURCE), var_export($this->source, true)) : '';
+        return sprintf($this->prepare($klass, 0, false, true), $name, $this->getClassProperties(), $code, $sections, $blocks);
+    }
 
-        return sprintf($this->prepare($klass, 0, false, true), $name, $callable, $variable, $lambda, $source, $code, $sections, $blocks);
+    /**
+     * Generate compiled template property declarations.
+     *
+     * @return string
+     */
+    private function getClassProperties()
+    {
+        $properties = [];
+
+        if (!empty($this->sections) || !empty($this->blocks)) {
+            $properties[] = $this->prepare(self::LAMBDA_HELPER);
+        }
+
+        if ($this->strictCallables) {
+            $properties[] = $this->prepare(self::STRICT_CALLABLE);
+        }
+
+        if ($this->strictTags !== Engine::STRICT_NONE) {
+            $properties[] = sprintf($this->prepare(self::STRICT_TAGS), $this->strictTags);
+        }
+
+        if (!empty($this->blockNames)) {
+            $properties[] = sprintf($this->prepare(self::BLOCK_NAMES), var_export($this->blockNames, true));
+        }
+
+        if ($this->hasParents) {
+            $properties[] = $this->prepare(self::HAS_PARENTS);
+        }
+
+        if (!$this->lambdas) {
+            $properties[] = $this->prepare(self::NO_LAMBDAS);
+        }
+
+        if ($this->lambdas && !empty($this->sections)) {
+            // Substitute the source value after prepare() so its newlines aren't re-indented (which would break section source offsets).
+            $properties[] = sprintf($this->prepare(self::SOURCE), var_export($this->source, true));
+        }
+
+        return empty($properties) ? '' : implode('', $properties) . "\n";
     }
 
     const BLOCK_VAR = '
@@ -314,6 +358,9 @@ class Compiler
      */
     private function blockVar(array $nodes, $id, $start, $end, $otag, $ctag, $indent, $standalone, $level)
     {
+        if (($this->options->strictTags & Engine::STRICT_EXTRA_BLOCKS) !== 0) {
+            $this->blockNames[$id] = true;
+        }
         $id = var_export($id, true);
         $indent = $this->getBlockIndentExpression($nodes, $indent, $standalone);
 
@@ -609,11 +656,7 @@ class Compiler
     }
 
     const SECTION_CALL = '
-        try {
-            $value = %s;%s
-        } catch (\\Mustache\\Exception\\UnknownVariableException $e) {
-            $value = "";
-        }
+        $value = %s;%s
         $buffer .= $this->section%s($context, $indent, $value);
     ';
 
@@ -725,18 +768,14 @@ class Compiler
             }
         }
 
-        $value = $this->getFindValue($id);
+        $value = $this->getFindValue($id, Engine::STRICT_SECTIONS);
         $filters = $this->getFilters($filters, $level);
 
         return sprintf($this->prepare(self::SECTION_CALL, $level), $value, $filters, $key);
     }
 
     const INVERTED_SECTION = '
-        try {
-            $value = %s;%s
-        } catch (\\Mustache\\Exception\\UnknownVariableException $e) {
-            $value = "";
-        }
+        $value = %s;%s
         if (empty($value)) {
             %s
         }
@@ -754,13 +793,13 @@ class Compiler
      */
     private function invertedSection(array $nodes, $id, $filters, $level)
     {
-        $value = $this->getFindValue($id);
+        $value = $this->getFindValue($id, Engine::STRICT_SECTIONS);
         $filters = $this->getFilters($filters, $level);
 
         return sprintf($this->prepare(self::INVERTED_SECTION, $level), $value, $filters, $this->walk($nodes, $level));
     }
 
-    const DYNAMIC_NAME = '$this->resolveValue($context->%s(%s%s), $context)';
+    const DYNAMIC_NAME = '$this->resolveValue(%s, $context)';
 
     /**
      * Generate Mustache Template dynamic name resolution PHP source.
@@ -770,31 +809,27 @@ class Compiler
      *
      * @return string Dynamic name resolution PHP source code
      */
-    private function resolveDynamicName($id, $dynamic)
+    private function resolveDynamicName($id, $dynamic, $strictTag)
     {
         if (!$dynamic) {
             return var_export($id, true);
         }
 
-        $method  = $this->getFindMethod($id);
-        $id      = ($method !== 'last') ? var_export($id, true) : '';
-        $findArg = $this->getFindMethodArgs($method);
-
         // TODO: filters?
 
-        return sprintf(self::DYNAMIC_NAME, $method, $id, $findArg);
+        return sprintf(self::DYNAMIC_NAME, $this->getFindValue($id, $strictTag));
     }
 
     const PARTIAL_INDENT = ', $indent . %s';
     const PARTIAL = '
-        if ($partial = $this->mustache->loadPartial(%s)) {
+        if ($partial = $this->mustache->loadPartial(%s%s)) {
             $buffer .= $partial->renderInternal($context%s);
         }
     ';
     const PARTIAL_CACHE_INIT = '$%s = false;';
     const PARTIAL_CACHED = '
         if ($%s === false) {
-            $%s = $this->mustache->loadPartial(%s);
+            $%s = $this->mustache->loadPartial(%s%s);
         }
         if ($%s) {
             $buffer .= $%s->renderInternal($context%s);
@@ -813,6 +848,8 @@ class Compiler
      */
     private function partial($id, $dynamic, $indent, $level)
     {
+        $loadPartial = ($this->strictTags & Engine::STRICT_PARTIALS) !== 0 ? 'loadPartialStrict' : 'loadPartial';
+
         if ($indent !== '') {
             $indentParam = sprintf(self::PARTIAL_INDENT, var_export($indent, true));
         } else {
@@ -827,6 +864,7 @@ class Compiler
                 $partial,
                 $partial,
                 var_export($id, true),
+                $strictArg,
                 $partial,
                 $partial,
                 $indentParam
@@ -835,39 +873,40 @@ class Compiler
 
         return sprintf(
             $this->prepare(self::PARTIAL, $level),
-            $this->resolveDynamicName($id, $dynamic),
+            $this->resolveDynamicName($id, $dynamic, Engine::STRICT_PARTIALS),
+            $strictArg,
             $indentParam
         );
     }
 
     const PARENT = '
-        if ($parent = $this->mustache->loadPartial(%s)) {
+        if ($parent = $this->mustache->loadPartial(%s%s)) {
             $context->pushBlockContext([%s
-            ]);
+            ]);%s
             $buffer .= $parent->renderInternal($context%s);
             $context->popBlockContext();
         }
     ';
 
     const PARENT_NO_CONTEXT = '
-        if ($parent = $this->mustache->loadPartial(%s)) {
+        if ($parent = $this->mustache->loadPartial(%s%s)) {%s
             $buffer .= $parent->renderInternal($context%s);
         }
     ';
 
     const PARENT_SCOPED = '
-        if ($parent = $this->mustache->loadPartial(%s)) {
+        if ($parent = $this->mustache->loadPartial(%s%s)) {
             $context->pushBlockContextScope();
             $context->pushBlockContext([%s
-            ]);
+            ]);%s
             $buffer .= $parent->renderInternal($context%s);
             $context->popBlockContextScope();
         }
     ';
 
     const PARENT_SCOPED_NO_CONTEXT = '
-        if ($parent = $this->mustache->loadPartial(%s)) {
-            $context->pushBlockContextScope();
+        if ($parent = $this->mustache->loadPartial(%s%s)) {
+            $context->pushBlockContextScope();%s
             $buffer .= $parent->renderInternal($context%s);
             $context->popBlockContextScope();
         }
@@ -875,11 +914,11 @@ class Compiler
 
     const PARENT_CACHED = '
         if ($%s === false) {
-            $%s = $this->mustache->loadPartial(%s);
+            $%s = $this->mustache->loadPartial(%s%s);
         }
         if ($%s) {
             $context->pushBlockContext([%s
-            ]);
+            ]);%s
             $buffer .= $%s->renderInternal($context%s);
             $context->popBlockContext();
         }
@@ -887,21 +926,21 @@ class Compiler
 
     const PARENT_CACHED_NO_CONTEXT = '
         if ($%s === false) {
-            $%s = $this->mustache->loadPartial(%s);
+            $%s = $this->mustache->loadPartial(%s%s);
         }
-        if ($%s) {
+        if ($%s) {%s
             $buffer .= $%s->renderInternal($context%s);
         }
     ';
 
     const PARENT_CACHED_SCOPED = '
         if ($%s === false) {
-            $%s = $this->mustache->loadPartial(%s);
+            $%s = $this->mustache->loadPartial(%s%s);
         }
         if ($%s) {
             $context->pushBlockContextScope();
             $context->pushBlockContext([%s
-            ]);
+            ]);%s
             $buffer .= $%s->renderInternal($context%s);
             $context->popBlockContextScope();
         }
@@ -909,14 +948,16 @@ class Compiler
 
     const PARENT_CACHED_SCOPED_NO_CONTEXT = '
         if ($%s === false) {
-            $%s = $this->mustache->loadPartial(%s);
+            $%s = $this->mustache->loadPartial(%s%s);
         }
         if ($%s) {
-            $context->pushBlockContextScope();
+            $context->pushBlockContextScope();%s
             $buffer .= $%s->renderInternal($context%s);
             $context->popBlockContextScope();
         }
     ';
+
+    const ASSERT_BLOCK_CONTEXT = '%s->assertBlockContext($context);';
 
     /**
      * Generate Mustache Template inheritance parent call PHP source.
@@ -932,8 +973,13 @@ class Compiler
     private function parent($id, $dynamic, $indent, array $children, $level)
     {
         $realChildren = array_filter($children, [self::class, 'onlyBlockArgs']);
-        $partialName = $this->resolveDynamicName($id, $dynamic);
+        if (($this->options->strictTags & Engine::STRICT_EXTRA_BLOCKS) !== 0) {
+            $this->hasParents = true;
+        }
+
+        $partialName = $this->resolveDynamicName($id, $dynamic, Engine::STRICT_PARENTS);
         $indentParam = $indent !== '' ? sprintf(self::PARTIAL_INDENT, var_export($indent, true)) : ', $indent';
+        $loadPartial = ($this->strictTags & Engine::STRICT_PARENTS) !== 0 ? 'loadPartialStrict' : 'loadPartial';
 
         // Nested inside a block argument: emit a scoped parent so its block
         // contexts don't leak out to the surrounding parent's block lookups.
@@ -948,7 +994,9 @@ class Compiler
                     $parent,
                     $parent,
                     var_export($id, true),
+                    $strictArg,
                     $parent,
+                    $this->getAssertBlockContext('$' . $parent, $level + 1),
                     $parent,
                     $indentParam
                 );
@@ -959,8 +1007,10 @@ class Compiler
                 $parent,
                 $parent,
                 var_export($id, true),
+                $strictArg,
                 $parent,
                 $this->walk($realChildren, $level + 1),
+                $this->getAssertBlockContext('$' . $parent, $level + 1),
                 $parent,
                 $indentParam
             );
@@ -970,6 +1020,8 @@ class Compiler
             return sprintf(
                 $this->prepare($scoped ? self::PARENT_SCOPED_NO_CONTEXT : self::PARENT_NO_CONTEXT, $level),
                 $partialName,
+                $strictArg,
+                $this->getAssertBlockContext('$parent', $level + 1),
                 $indentParam
             );
         }
@@ -977,9 +1029,28 @@ class Compiler
         return sprintf(
             $this->prepare($scoped ? self::PARENT_SCOPED : self::PARENT, $level),
             $partialName,
+            $strictArg,
             $this->walk($realChildren, $level + 1),
+            $this->getAssertBlockContext('$parent', $level + 1),
             $indentParam
         );
+    }
+
+    /**
+     * Generate strict extra block assertion source for a loaded parent template.
+     *
+     * @param string $parent Loaded parent template expression
+     * @param int    $level
+     *
+     * @return string
+     */
+    private function getAssertBlockContext($parent, $level)
+    {
+        if (($this->options->strictTags & Engine::STRICT_EXTRA_BLOCKS) === 0) {
+            return '';
+        }
+
+        return sprintf($this->prepare(self::ASSERT_BLOCK_CONTEXT, $level), $parent);
     }
 
     /**
@@ -1071,7 +1142,7 @@ class Compiler
      */
     private function variable($id, $filters, $escape, $level)
     {
-        $lookup  = $this->getFindValue($id);
+        $lookup  = $this->getFindValue($id, Engine::STRICT_INTERPOLATION);
         $filters = $this->getFilters($filters, $level);
         $value   = $escape ? $this->getEscape() : '$value';
 
@@ -1185,7 +1256,7 @@ class Compiler
         }
     ';
 
-    const CONTEXT_FRAME_LOOKUP = '(array_key_exists(%1$s, $frame) ? $frame[%1$s] : $context->find(%1$s))';
+    const CONTEXT_FRAME_LOOKUP = '(array_key_exists(%1$s, $frame) ? $frame[%1$s] : $context->find(%1$s%2$s))';
 
     /**
      * Walk a subtree with a context frame scope active, prepending the cached-frame
@@ -1320,17 +1391,17 @@ class Compiler
      *
      * @return string
      */
-    private function getFindValue($id)
+    private function getFindValue($id, $strictTag = Engine::STRICT_NONE)
     {
         $method = $this->getFindMethod($id);
 
         if ($method === 'find' && $this->hasContextFrameScope()) {
-            return sprintf(self::CONTEXT_FRAME_LOOKUP, var_export($id, true));
+            return sprintf(self::CONTEXT_FRAME_LOOKUP, var_export($id, true), $this->getFindMethodArgs($method, $strictTag));
         }
 
         $id = ($method !== 'last') ? var_export($id, true) : '';
 
-        return sprintf('$context->%s(%s%s)', $method, $id, $this->getFindMethodArgs($method));
+        return sprintf('$context->%s(%s%s)', $method, $id, $this->getFindMethodArgs($method, $strictTag));
     }
 
     /**
@@ -1368,14 +1439,25 @@ class Compiler
     /**
      * Get the args needed for a given find method.
      *
-     * In this case, it's "true" iff it's a "find dot" method and strict callables is enabled.
+     * Strict-tag and strict-callables args are only emitted when the engine
+     * actually uses them, so non-strict templates compile to leaner code.
      *
      * @param string $method Find method name
      */
-    private function getFindMethodArgs($method)
+    private function getFindMethodArgs($method, $strictTag = Engine::STRICT_NONE)
     {
-        if (($method === 'findDot' || $method === 'findAnchoredDot') && $this->strictCallables) {
-            return ', true';
+        $strict = $this->strictTags !== Engine::STRICT_NONE;
+
+        if ($method === 'find') {
+            return $strict ? sprintf(', %d', $strictTag) : '';
+        }
+
+        if ($method === 'findDot' || $method === 'findAnchoredDot') {
+            if (!$strict) {
+                return $this->strictCallables ? ', true' : '';
+            }
+
+            return sprintf(', %s, %d', $this->strictCallables ? 'true' : 'false', $strictTag);
         }
 
         return '';
