@@ -1,6 +1,6 @@
 /test export-ignore
 /CONTRIBUTING.md export-ignore
-/.php_cs export-ignore
+/.php-cs-fixer.php export-ignore
 /phpunit.xml.dist export-ignore
 /.gitmodules export-ignore
 /.gitignore export-ignore
