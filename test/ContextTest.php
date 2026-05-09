@@ -124,6 +124,47 @@ class ContextTest extends TestCase
         $this->assertSame('win', $context->find('qux'), 'ArrayAccess beats private property');
     }
 
+    public function testNonPublicMethodsDoNotBlockPropertyLookup()
+    {
+        $context = new Context(new NonPublicMethodAndProperty());
+
+        $this->assertSame('win', $context->find('privateValue'));
+        $this->assertSame('win', $context->find('protectedValue'));
+    }
+
+    public function testNonPublicMethodsDoNotBlockMagicPropertyLookup()
+    {
+        $context = new Context(new NonPublicMethodAndMagicProperty());
+
+        $this->assertSame('win', $context->find('privateValue'));
+        $this->assertSame('win', $context->find('protectedValue'));
+    }
+
+    public function testNonPublicMethodsDoNotBlockArrayAccessLookup()
+    {
+        $context = new Context(new NonPublicMethodAndArrayAccess());
+
+        $this->assertSame('win', $context->find('privateValue'));
+        $this->assertSame('win', $context->find('protectedValue'));
+    }
+
+    public function testNonPublicMethodsAreTreatedAsUnknownVariables()
+    {
+        $context = new Context(new NonPublicMethodsOnly());
+
+        $this->assertSame('', $context->find('privateValue'));
+        $this->assertSame('', $context->find('protectedValue'));
+    }
+
+    public function testNonPublicMethodsAreTreatedAsUnknownVariablesInStrictMode()
+    {
+        $this->expectException(UnknownVariableException::class);
+        $this->expectExceptionMessage('Unknown variable: privateValue');
+
+        $context = new Context(new NonPublicMethodsOnly(), false, Engine::STRICT_INTERPOLATION);
+        $context->find('privateValue');
+    }
+
     public function testAnchoredDotNotation()
     {
         $context = new Context();
@@ -369,5 +410,99 @@ class AllTheThings implements \ArrayAccess
     public function offsetUnset($offset)
     {
         // nada
+    }
+}
+
+class NonPublicMethodAndProperty
+{
+    public $privateValue = 'win';
+    public $protectedValue = 'win';
+
+    private function privateValue()
+    {
+        return 'fail';
+    }
+
+    protected function protectedValue()
+    {
+        return 'fail';
+    }
+}
+
+class NonPublicMethodAndMagicProperty
+{
+    private $values = [
+        'privateValue'   => 'win',
+        'protectedValue' => 'win',
+    ];
+
+    public function __isset($name)
+    {
+        return isset($this->values[$name]);
+    }
+
+    public function __get($name)
+    {
+        return $this->values[$name];
+    }
+
+    private function privateValue()
+    {
+        return 'fail';
+    }
+
+    protected function protectedValue()
+    {
+        return 'fail';
+    }
+}
+
+class NonPublicMethodAndArrayAccess implements \ArrayAccess
+{
+    #[\ReturnTypeWillChange]
+    public function offsetExists($offset)
+    {
+        return $offset === 'privateValue' || $offset === 'protectedValue';
+    }
+
+    #[\ReturnTypeWillChange]
+    public function offsetGet($offset)
+    {
+        return 'win';
+    }
+
+    #[\ReturnTypeWillChange]
+    public function offsetSet($offset, $value)
+    {
+        // nada
+    }
+
+    #[\ReturnTypeWillChange]
+    public function offsetUnset($offset)
+    {
+        // nada
+    }
+
+    private function privateValue()
+    {
+        return 'fail';
+    }
+
+    protected function protectedValue()
+    {
+        return 'fail';
+    }
+}
+
+class NonPublicMethodsOnly
+{
+    private function privateValue()
+    {
+        return 'fail';
+    }
+
+    protected function protectedValue()
+    {
+        return 'fail';
     }
 }

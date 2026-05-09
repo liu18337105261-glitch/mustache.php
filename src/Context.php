@@ -26,6 +26,7 @@ class Context
     private $blockScopeIndex  = 0;
     private $renderingStack   = [];
     private $renderingStackSize = 0;
+    private static $publicMethods = [];
 
     private $buggyPropertyShadowing = false;
 
@@ -364,9 +365,7 @@ class Context
                 continue;
             }
 
-            // Note that is_callable() *will not work here*
-            // See https://github.com/bobthecow/mustache.php/wiki/Magic-Methods
-            if (method_exists($frame, $id)) {
+            if ($this->hasPublicMethod($frame, $id)) {
                 return $frame->$id();
             }
 
@@ -400,5 +399,29 @@ class Context
         }
 
         return '';
+    }
+
+    /**
+     * Check whether an object exposes a named public method.
+     *
+     * This intentionally uses get_class_methods() rather than is_callable() so
+     * magic __call handlers do not change Mustache lookup semantics.
+     *
+     * @see https://github.com/bobthecow/mustache.php/wiki/Magic-Methods
+     *
+     * @param object $object
+     * @param string $method
+     *
+     * @return bool
+     */
+    private function hasPublicMethod($object, $method)
+    {
+        $class = get_class($object);
+
+        if (!isset(self::$publicMethods[$class])) {
+            self::$publicMethods[$class] = array_fill_keys(array_map('strtolower', get_class_methods($object)), true);
+        }
+
+        return isset(self::$publicMethods[$class][strtolower($method)]);
     }
 }
