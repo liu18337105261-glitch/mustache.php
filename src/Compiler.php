@@ -415,7 +415,7 @@ class Compiler
             $properties[] = $this->prepare(self::STRICT_CALLABLE);
         }
 
-        if ($this->options->strictTags !== Engine::STRICT_NONE) {
+        if ($this->hasStrictLookups()) {
             $properties[] = sprintf($this->prepare(self::STRICT_TAGS), $this->options->strictTags);
         }
 
@@ -1251,7 +1251,7 @@ class Compiler
     {
         $lookup  = $this->getFindValue($id, Engine::STRICT_INTERPOLATION);
         $filters = $this->getFilters($filters, $level);
-        $value   = $escape ? $this->getEscape() : '$value';
+        $value   = $escape ? $this->getEscape() : $this->getStringify('$value');
 
         return sprintf($this->prepare(self::VARIABLE, $level), $lookup, $filters, $this->flushIndent(), $value);
     }
@@ -1338,7 +1338,8 @@ class Compiler
     }
 
     const DEFAULT_ESCAPE = 'htmlspecialchars(%s, %s, %s)';
-    const CUSTOM_ESCAPE  = 'call_user_func($this->mustache->getEscape(), %s)';
+    const CUSTOM_ESCAPE  = '$this->stringifyValue(call_user_func($this->mustache->getEscape(), %s)%s)';
+    const STRINGIFY      = '(is_scalar(%1$s) ? %1$s : $this->stringifyNonScalar(%1$s%2$s))';
 
     /**
      * Get the current escaper.
@@ -1350,10 +1351,32 @@ class Compiler
     private function getEscape($value = '$value')
     {
         if ($this->options->customEscape) {
-            return sprintf(self::CUSTOM_ESCAPE, $value);
+            return sprintf(self::CUSTOM_ESCAPE, $value, $this->getStringifyTail());
         }
 
-        return sprintf(self::DEFAULT_ESCAPE, $value, var_export($this->options->entityFlags, true), var_export($this->options->charset, true));
+        return sprintf(self::DEFAULT_ESCAPE, $this->getStringify($value), var_export($this->options->entityFlags, true), var_export($this->options->charset, true));
+    }
+
+    /**
+     * Get output coercion PHP source for the current coercion strictness.
+     *
+     * @param string $value (default: '$value')
+     *
+     * @return string
+     */
+    private function getStringify($value = '$value')
+    {
+        return sprintf(self::STRINGIFY, $value, $this->getStringifyTail());
+    }
+
+    /**
+     * Get arguments to pass through to stringify helpers for current coercion strictness.
+     *
+     * @return string
+     */
+    private function getStringifyTail()
+    {
+        return ($this->options->strictTags & Engine::STRICT_COERCION) !== 0 ? '' : ', false';
     }
 
     const CONTEXT_FRAME_HOIST = '
@@ -1553,7 +1576,7 @@ class Compiler
      */
     private function getFindMethodArgs($method, $strictTag = Engine::STRICT_NONE)
     {
-        $strict = $this->options->strictTags !== Engine::STRICT_NONE;
+        $strict = $this->hasStrictLookups();
 
         if ($method === 'find') {
             return $strict ? sprintf(', %d', $strictTag) : '';
@@ -1585,6 +1608,16 @@ class Compiler
         $tpl = $this->options->strictCallables ? self::STRICT_IS_CALLABLE : self::IS_CALLABLE;
 
         return sprintf($tpl, $variable, $variable);
+    }
+
+    /**
+     * Check whether strict tag lookup categories beyond output coercion are enabled.
+     *
+     * @return bool
+     */
+    private function hasStrictLookups()
+    {
+        return ($this->options->strictTags & ~Engine::STRICT_COERCION) !== Engine::STRICT_NONE;
     }
 
     const LINE_INDENT = '$indent . ';

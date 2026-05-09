@@ -12,6 +12,7 @@
 namespace Mustache;
 
 use Mustache\Exception\RenderingException;
+use Mustache\Exception\RuntimeException;
 use Mustache\Exception\UnknownBlockException;
 
 /**
@@ -239,5 +240,49 @@ abstract class Template
         }
 
         return $value;
+    }
+
+    /**
+     * Prepare a resolved value for template output.
+     *
+     * @param mixed $value
+     * @param bool  $strict
+     *
+     * @return string
+     */
+    protected function stringifyValue($value, $strict = true)
+    {
+        if ($value === null) {
+            return '';
+        }
+
+        if (is_scalar($value)) {
+            return (string) $value;
+        }
+
+        return $this->stringifyNonScalar($value, $strict);
+    }
+
+    /**
+     * Prepare a non-null, non-scalar value for template output.
+     *
+     * @param mixed $value
+     * @param bool  $strict
+     *
+     * @return string
+     */
+    protected function stringifyNonScalar($value, $strict = true)
+    {
+        if (is_object($value) && method_exists($value, '__toString')) {
+            return (string) $value;
+        }
+
+        if (!$strict) {
+            return '';
+        }
+
+        $type = is_object($value) ? get_class($value) : gettype($value);
+
+        throw new RuntimeException(sprintf('Cannot render non-stringable value of type %s', $type));
     }
 }

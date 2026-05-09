@@ -22,7 +22,7 @@ class CompileOptions
     public $charset = 'UTF-8';
     public $strictCallables = false;
     public $entityFlags = ENT_COMPAT;
-    public $strictTags = Engine::STRICT_NONE;
+    public $strictTags = Engine::STRICT_COERCION;
     public $debugRendering = false;
     public $sourceName;
 

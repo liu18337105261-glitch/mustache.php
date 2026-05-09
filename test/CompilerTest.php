@@ -62,7 +62,7 @@ class CompilerTest extends TestCase
                 [
                     "\nclass Monkey extends \Mustache\Template",
                     '$value = $this->resolveValue($context->find(\'name\'), $context);',
-                    '$buffer .= $indent . ($value === null ? \'\' : call_user_func($this->mustache->getEscape(), $value));',
+                    '$buffer .= $indent . ($value === null ? \'\' : $this->stringifyValue(call_user_func($this->mustache->getEscape(), $value)));',
                     'return $buffer;',
                 ],
             ],
@@ -82,7 +82,7 @@ class CompilerTest extends TestCase
                 [
                     "\nclass Monkey extends \Mustache\Template",
                     '$value = $this->resolveValue($context->find(\'name\'), $context);',
-                    '$buffer .= $indent . ($value === null ? \'\' : htmlspecialchars($value, ' . ENT_COMPAT . ', \'ISO-8859-1\'));',
+                    '$buffer .= $indent . ($value === null ? \'\' : htmlspecialchars((is_scalar($value) ? $value : $this->stringifyNonScalar($value)), ' . ENT_COMPAT . ', \'ISO-8859-1\'));',
                     'return $buffer;',
                 ],
             ],
@@ -102,7 +102,7 @@ class CompilerTest extends TestCase
                 [
                     "\nclass Monkey extends \Mustache\Template",
                     '$value = $this->resolveValue($context->find(\'name\'), $context);',
-                    '$buffer .= $indent . ($value === null ? \'\' : htmlspecialchars($value, ' . ENT_QUOTES . ', \'ISO-8859-1\'));',
+                    '$buffer .= $indent . ($value === null ? \'\' : htmlspecialchars((is_scalar($value) ? $value : $this->stringifyNonScalar($value)), ' . ENT_QUOTES . ', \'ISO-8859-1\'));',
                     'return $buffer;',
                 ],
             ],
@@ -129,7 +129,7 @@ class CompilerTest extends TestCase
                     "\nclass Monkey extends \Mustache\Template",
                     "\$buffer .= \$indent . 'foo\n';",
                     '$value = $this->resolveValue($context->find(\'name\'), $context);',
-                    '$buffer .= ($value === null ? \'\' : htmlspecialchars($value, ' . ENT_COMPAT . ', \'UTF-8\'));',
+                    '$buffer .= ($value === null ? \'\' : htmlspecialchars((is_scalar($value) ? $value : $this->stringifyNonScalar($value)), ' . ENT_COMPAT . ', \'UTF-8\'));',
                     '$value = $this->resolveValue($context->last(), $context);',
                     '$buffer .= \'\\\'bar\\\'\';',
                     'return $buffer;',

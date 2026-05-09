@@ -47,11 +47,13 @@ class Engine
     const STRICT_PARTIALS      = 1 << 2;
     const STRICT_PARENTS       = 1 << 3;
     const STRICT_EXTRA_BLOCKS  = 1 << 4;
+    const STRICT_COERCION      = 1 << 5;
     const STRICT_ALL = self::STRICT_INTERPOLATION
         | self::STRICT_SECTIONS
         | self::STRICT_PARTIALS
         | self::STRICT_PARENTS
-        | self::STRICT_EXTRA_BLOCKS;
+        | self::STRICT_EXTRA_BLOCKS
+        | self::STRICT_COERCION;
 
     /**
      * @deprecated PRAGMA_BLOCKS is now part of the Mustache spec, and is enabled by default
@@ -82,7 +84,7 @@ class Engine
     private $charset = 'UTF-8';
     private $logger;
     private $strictCallables = true;
-    private $strictTags = self::STRICT_NONE;
+    private $strictTags = self::STRICT_COERCION;
     private $pragmas = [];
     private $delimiters;
     private $buggyPropertyShadowing = false;
@@ -166,6 +168,7 @@ class Engine
      *
      *         // Treat missing Mustache tags as a failure and throw an exception instead of silently ignoring them.
      *         // Set this to true for all strict tag categories, or use an Engine::STRICT_* bitmask.
+     *         // STRICT_COERCION validates that rendered values are stringable before output; this is enabled by default.
      *         // STRICT_EXTRA_BLOCKS validates block overrides only when a concrete parent template is rendered; skipped
      *         // conditional parent paths do not throw for otherwise unused overrides.
      *         'strict_tags' => \Mustache\Engine::STRICT_INTERPOLATION | \Mustache\Engine::STRICT_PARTIALS,
