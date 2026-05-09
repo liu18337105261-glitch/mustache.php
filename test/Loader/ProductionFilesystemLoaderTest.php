@@ -19,6 +19,8 @@ use Mustache\Test\TestCase;
 
 class ProductionFilesystemLoaderTest extends TestCase
 {
+    use TraversalFixtureTrait;
+
     public function testConstructor()
     {
         $baseDir = realpath(__DIR__ . '/../fixtures/templates');
@@ -101,5 +103,71 @@ class ProductionFilesystemLoaderTest extends TestCase
         $this->assertNotSame($mtimeKey, $sizeKey);
         $this->assertNotSame($mtimeKey, $bothKey);
         $this->assertNotSame($sizeKey, $bothKey);
+    }
+
+    public function testRejectsTraversalInName()
+    {
+        $paths = $this->createTraversalFixture('mustache_production_loader_test');
+        $loader = new ProductionFilesystemLoader($paths['base']);
+
+        try {
+            try {
+                $loader->load('../../secret/leaked');
+                $this->fail('Expected traversal to throw');
+            } catch (UnknownTemplateException $e) {
+                $this->assertSame('../../secret/leaked', $e->getTemplateName());
+            }
+        } finally {
+            $this->removeTraversalFixture($paths);
+        }
+    }
+
+    public function testRejectsTraversalWithEmptyExtension()
+    {
+        $paths = $this->createTraversalFixture('mustache_production_loader_test');
+        $loader = new ProductionFilesystemLoader($paths['base'], ['extension' => '']);
+
+        try {
+            try {
+                $loader->load('../../secret/raw.txt');
+                $this->fail('Expected traversal to throw');
+            } catch (UnknownTemplateException $e) {
+                $this->assertSame('../../secret/raw.txt', $e->getTemplateName());
+            }
+        } finally {
+            $this->removeTraversalFixture($paths);
+        }
+    }
+
+    public function testAllowsUnsafeTemplateNamesWhenConfigured()
+    {
+        $paths = $this->createTraversalFixture('mustache_production_loader_test');
+        $loader = new ProductionFilesystemLoader($paths['base'], [
+            'allow_unsafe_template_names' => true,
+        ]);
+
+        try {
+            $this->assertSame('leaked contents', $loader->load('../../secret/leaked')->getSource());
+        } finally {
+            $this->removeTraversalFixture($paths);
+        }
+    }
+
+    public function testRejectsNullByteInName()
+    {
+        $this->expectException(UnknownTemplateException::class);
+        $baseDir = realpath(__DIR__ . '/../fixtures/templates');
+        $loader = new ProductionFilesystemLoader($baseDir);
+
+        $loader->load("one\0");
+    }
+
+    public function testSchemeLikeNameDoesNotActivateStreamWrapper()
+    {
+        $this->expectException(UnknownTemplateException::class);
+        $baseDir = realpath(__DIR__ . '/../fixtures/templates');
+        $loader = new ProductionFilesystemLoader($baseDir, ['extension' => '']);
+
+        $loader->load('file:///etc/hosts');
     }
 }
