@@ -214,6 +214,50 @@ class EngineTest extends FunctionalTestCase
         ];
     }
 
+    public function testDebugRenderingModes()
+    {
+        $always = new Engine(['debug_rendering' => Engine::DEBUG_RENDERING_ALWAYS]);
+        $never = new Engine(['debug_rendering' => Engine::DEBUG_RENDERING_NEVER]);
+        $onException = new Engine(['debug_rendering' => Engine::DEBUG_RENDERING_ON_EXCEPTION]);
+        $alwaysString = new Engine(['debug_rendering' => 'always']);
+        $neverString = new Engine(['debug_rendering' => 'never']);
+        $onExceptionString = new Engine(['debug_rendering' => 'on_exception']);
+
+        $this->assertSame('OK', $always->render('{{ value }}', ['value' => 'OK']));
+        $this->assertSame('OK', $never->render('{{ value }}', ['value' => 'OK']));
+        $this->assertSame('OK', $onException->render('{{ value }}', ['value' => 'OK']));
+        $this->assertSame('OK', $alwaysString->render('{{ value }}', ['value' => 'OK']));
+        $this->assertSame('OK', $neverString->render('{{ value }}', ['value' => 'OK']));
+        $this->assertSame('OK', $onExceptionString->render('{{ value }}', ['value' => 'OK']));
+    }
+
+    /**
+     * @dataProvider getInvalidDebugRendering
+     */
+    public function testInvalidDebugRenderingThrowsException($debugRendering)
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('debug_rendering');
+        new Engine([
+            'debug_rendering' => $debugRendering,
+        ]);
+    }
+
+    public function getInvalidDebugRendering()
+    {
+        return [
+            [true],
+            [false],
+            [0],
+            [1],
+            ['0'],
+            ['true'],
+            ['false'],
+            ['sometimes'],
+            [[true]],
+        ];
+    }
+
     /**
      * @dataProvider getBadEscapers
      */
@@ -362,7 +406,7 @@ class EngineTest extends FunctionalTestCase
     public function testDebugRenderingExceptionIncludesRenderingStack()
     {
         $mustache = new Engine([
-            'debug_rendering' => true,
+            'debug_rendering' => Engine::DEBUG_RENDERING_ALWAYS,
             'loader' => new ArrayLoader([
                 'main' => '{{# items }}{{> row }}{{/ items }}',
             ]),
@@ -407,6 +451,75 @@ class EngineTest extends FunctionalTestCase
         }
 
         $this->fail('Expected RenderingException');
+    }
+
+    public function testDebugRenderingOnExceptionRerendersWithRenderingStack()
+    {
+        $escapes = 0;
+        $mustache = new Engine([
+            'debug_rendering' => Engine::DEBUG_RENDERING_ON_EXCEPTION,
+            'loader' => new ArrayLoader([
+                'main' => '{{# items }}{{> row }}{{/ items }}',
+            ]),
+            'partials' => [
+                'row' => '{{ bad }}',
+            ],
+            'escape' => function ($value) use (&$escapes) {
+                if (is_array($value)) {
+                    $escapes++;
+                    throw new \RuntimeException('array value');
+                }
+
+                return $value;
+            },
+        ]);
+
+        try {
+            $mustache->loadTemplate('main')->render([
+                'items' => [
+                    ['bad' => []],
+                ],
+            ]);
+        } catch (RenderingException $e) {
+            $frames = $e->getFrames();
+
+            $this->assertSame(2, $escapes);
+            $this->assertCount(3, $frames);
+            $this->assertSame('section', $frames[0]['type']);
+            $this->assertSame('items', $frames[0]['name']);
+            $this->assertSame('main', $frames[0]['source']);
+            $this->assertSame('partial', $frames[1]['type']);
+            $this->assertSame('row', $frames[1]['name']);
+            $this->assertSame('main', $frames[1]['source']);
+            $this->assertSame('variable', $frames[2]['type']);
+            $this->assertSame('bad', $frames[2]['name']);
+            $this->assertSame('row', $frames[2]['source']);
+            $this->assertStringContainsString(
+                'Error rendering variable "bad" on line 0 of row: array value',
+                $e->getMessage()
+            );
+            $this->assertInstanceOf(\RuntimeException::class, $e->getPrevious());
+
+            return;
+        }
+
+        $this->fail('Expected RenderingException');
+    }
+
+    public function testDebugRenderingOnExceptionDoesNotRerenderSuccessfulTemplates()
+    {
+        $escapes = 0;
+        $mustache = new Engine([
+            'debug_rendering' => Engine::DEBUG_RENDERING_ON_EXCEPTION,
+            'escape' => function ($value) use (&$escapes) {
+                $escapes++;
+
+                return $value;
+            },
+        ]);
+
+        $this->assertSame('FOO', $mustache->render('{{ foo }}', ['foo' => 'FOO']));
+        $this->assertSame(1, $escapes);
     }
 
     public function testLoggingIsNotTooAnnoying()

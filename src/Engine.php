@@ -14,6 +14,7 @@ namespace Mustache;
 use Mustache\Cache\FilesystemCache;
 use Mustache\Cache\NoopCache;
 use Mustache\Exception\InvalidArgumentException;
+use Mustache\Exception\RenderingException;
 use Mustache\Exception\RuntimeException;
 use Mustache\Exception\UnknownTemplateException;
 use Mustache\Loader\ArrayLoader;
@@ -55,6 +56,10 @@ class Engine
         | self::STRICT_EXTRA_BLOCKS
         | self::STRICT_COERCION;
 
+    const DEBUG_RENDERING_ALWAYS       = 'always';
+    const DEBUG_RENDERING_ON_EXCEPTION = 'on_exception';
+    const DEBUG_RENDERING_NEVER        = 'never';
+
     /**
      * @deprecated PRAGMA_BLOCKS is now part of the Mustache spec, and is enabled by default
      */
@@ -88,7 +93,9 @@ class Engine
     private $pragmas = [];
     private $delimiters;
     private $buggyPropertyShadowing = false;
-    private $debugRendering = false;
+    private $debugRendering = self::DEBUG_RENDERING_NEVER;
+    private $debugRenderingRetry = false;
+    private $templateSources = [];
 
     // Optional Mustache specs
     private $dynamicNames = true;
@@ -158,8 +165,10 @@ class Engine
      *         'charset' => 'ISO-8859-1',
      *
      *         // Enable extra rendering debug context in generated templates. When enabled, rendering exceptions will
-     *         // include the Mustache tag stack that was active when rendering failed.
-     *         'debug_rendering' => true,
+     *         // include the Mustache tag stack that was active when rendering failed. Set to DEBUG_RENDERING_ALWAYS to
+     *         // always generate debug rendering code, DEBUG_RENDERING_ON_EXCEPTION to rerender with debug context after
+     *         // a failure, or DEBUG_RENDERING_NEVER to disable rendering debug context.
+     *         'debug_rendering' => \Mustache\Engine::DEBUG_RENDERING_ALWAYS,
      *
      *         // A Mustache Logger instance. No logging will occur unless this is set. Using a PSR-3 compatible
      *         // logging library -- such as Monolog -- is highly recommended. A simple stream logger implementation is
@@ -302,7 +311,7 @@ class Engine
         }
 
         if (isset($options['debug_rendering'])) {
-            $this->debugRendering = (bool) $options['debug_rendering'];
+            $this->debugRendering = self::normalizeDebugRendering($options['debug_rendering']);
         }
 
         if (isset($options['logger'])) {
@@ -421,13 +430,40 @@ class Engine
     }
 
     /**
-     * Check whether rendering debug context is enabled.
+     * Handle a failed render, adding debug context or retrying when configured.
      *
-     * @return bool
+     * @param mixed      $context
+     * @param \Throwable $previous
      */
-    public function getDebugRendering()
+    public function handleRenderException(Template $template, $context, Context $stack, $previous)
     {
-        return $this->debugRendering;
+        if ($this->getDebugRendering()) {
+            throw RenderingException::fromDebugContext($previous, $stack);
+        }
+
+        if ($this->debugRendering !== self::DEBUG_RENDERING_ON_EXCEPTION || $this->debugRenderingRetry) {
+            throw $previous;
+        }
+
+        $className = get_class($template);
+        if (!isset($this->templateSources[$className])) {
+            throw $previous;
+        }
+
+        $source = $this->templateSources[$className];
+
+        $this->debugRenderingRetry = true;
+        try {
+            // Recompiled with debug rendering active; this render is expected to throw a
+            // RenderingException with debug context. If it somehow doesn't, fall through and
+            // throw the original exception so the failure isn't hidden.
+            $debugTemplate = $this->loadSource($source['source'], null, $source['sourceName']);
+            $debugTemplate->render($context);
+        } finally {
+            $this->debugRenderingRetry = false;
+        }
+
+        throw $previous;
     }
 
     /**
@@ -803,7 +839,7 @@ class Engine
         // Keep this list in alphabetical order :)
         $chunks = [
             'charset'         => $this->charset,
-            'debugRendering'  => $this->debugRendering,
+            'debugRendering'  => $this->getDebugRendering(),
             'delimiters'      => $this->delimiters ?: '{{ }}',
             'entityFlags'     => $this->entityFlags,
             'escape'          => isset($this->escape) ? 'custom' : 'default',
@@ -815,7 +851,7 @@ class Engine
             'version'         => self::VERSION,
         ];
 
-        if ($this->debugRendering && $sourceName !== null) {
+        if ($this->getDebugRendering() && $sourceName !== null) {
             $chunks['debugSource'] = $sourceName;
         }
 
@@ -943,6 +979,13 @@ class Engine
             );
 
             $this->templates[$className] = new $className($this);
+
+            if ($this->debugRendering === self::DEBUG_RENDERING_ON_EXCEPTION && !$this->debugRenderingRetry) {
+                $this->templateSources[$className] = [
+                    'source' => $source,
+                    'sourceName' => $sourceName,
+                ];
+            }
         }
 
         return $this->templates[$className];
@@ -1011,7 +1054,7 @@ class Engine
         return $compiler->compile($source, $tree, $name, new CompileOptions([
             'custom_escape'    => isset($this->escape),
             'charset'          => $this->charset,
-            'debug_rendering'  => $this->debugRendering,
+            'debug_rendering'  => $this->getDebugRendering(),
             'entity_flags'     => $this->entityFlags,
             'source_name'      => $sourceName,
             'strict_callables' => $this->strictCallables,
@@ -1038,6 +1081,26 @@ class Engine
         }
 
         return $strictTags;
+    }
+
+    private static function normalizeDebugRendering($debugRendering)
+    {
+        if (
+            $debugRendering === self::DEBUG_RENDERING_ALWAYS
+            || $debugRendering === self::DEBUG_RENDERING_NEVER
+            || $debugRendering === self::DEBUG_RENDERING_ON_EXCEPTION
+        ) {
+            return $debugRendering;
+        }
+
+        throw new InvalidArgumentException(
+            'Mustache Constructor "debug_rendering" option must be one of "always", "never", or "on_exception"'
+        );
+    }
+
+    private function getDebugRendering()
+    {
+        return $this->debugRendering === self::DEBUG_RENDERING_ALWAYS || $this->debugRenderingRetry;
     }
 
     /**
