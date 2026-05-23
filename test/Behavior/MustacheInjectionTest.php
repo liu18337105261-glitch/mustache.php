@@ -12,15 +12,19 @@
 namespace Mustache\Test\Behavior;
 
 use Mustache\Engine;
+use Mustache\Loader\ArrayLoader;
 use Mustache\Test\TestCase;
 
 class MustacheInjectionTest extends TestCase
 {
+    const INJECTION_PAYLOAD = "x'); \\Mustache\\Test\\Behavior\\CompilerInjectionProbe::mark(); //";
+
     private $mustache;
 
     public function set_up()
     {
         $this->mustache = new Engine();
+        CompilerInjectionProbe::reset();
     }
 
     /**
@@ -74,5 +78,52 @@ class MustacheInjectionTest extends TestCase
             ['{{ a }}',           $lambdaInterpolationData, [], '{{ c }}'],
             ['{{# a }}b{{/ a }}', $lambdaSectionData,       [], '{{ c }}'],
         ];
+    }
+
+    public function testTemplateControlledPartialNameCannotInjectCompiledPhp()
+    {
+        $name = self::INJECTION_PAYLOAD;
+        $this->mustache->setPartials([$name => 'safe']);
+
+        $this->assertSame('safe', $this->mustache->render('{{> ' . $name . ' }}'));
+        $this->assertFalse(CompilerInjectionProbe::$hit);
+    }
+
+    public function testTemplateControlledParentNameCannotInjectCompiledPhp()
+    {
+        $name = self::INJECTION_PAYLOAD;
+        $this->mustache->setPartials([$name => 'safe']);
+
+        $this->assertSame('safe', $this->mustache->render('{{< ' . $name . ' }}{{/ ' . $name . ' }}'));
+        $this->assertFalse(CompilerInjectionProbe::$hit);
+    }
+
+    public function testTemplateSourceNameCannotInjectCompiledDebugMetadata()
+    {
+        $name = self::INJECTION_PAYLOAD;
+        $mustache = new Engine([
+            'debug_rendering' => Engine::DEBUG_RENDERING_ALWAYS,
+            'loader' => new ArrayLoader([
+                $name => '{{ value }}',
+            ]),
+        ]);
+
+        $this->assertSame('safe', $mustache->loadTemplate($name)->render(['value' => 'safe']));
+        $this->assertFalse(CompilerInjectionProbe::$hit);
+    }
+}
+
+class CompilerInjectionProbe
+{
+    public static $hit = false;
+
+    public static function mark()
+    {
+        self::$hit = true;
+    }
+
+    public static function reset()
+    {
+        self::$hit = false;
     }
 }

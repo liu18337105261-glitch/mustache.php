@@ -14,6 +14,7 @@ namespace Mustache\Test;
 use Mustache\CompileOptions;
 use Mustache\Compiler;
 use Mustache\Engine;
+use Mustache\Exception\InvalidArgumentException;
 use Mustache\Exception\SyntaxException;
 use Mustache\Parser;
 use Mustache\Tokenizer;
@@ -143,6 +144,15 @@ class CompilerTest extends TestCase
         $this->expectException(SyntaxException::class);
         $compiler = new Compiler();
         $compiler->compile('', [[Tokenizer::TYPE => 'invalid']], 'SomeClass');
+    }
+
+    public function testCompilerRejectsInvalidClassName()
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Compiler class name must be a valid PHP class name');
+
+        $compiler = new Compiler();
+        $compiler->compile('', [], 'SomeClass {} class Injected');
     }
 
     public function testStaticPartialsInSectionsAreLazyLoadedInsideLoop()

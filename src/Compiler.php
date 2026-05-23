@@ -62,6 +62,8 @@ class Compiler
      */
     public function compile($source, array $tree, $name, $optionsOrCustomEscape = false, $charset = 'UTF-8', $strictCallables = false, $entityFlags = ENT_COMPAT)
     {
+        $this->validateClassName($name);
+
         $this->pragmas            = $this->defaultPragmas;
         $this->sections           = [];
         $this->blocks             = [];
@@ -88,6 +90,16 @@ class Compiler
         }
 
         return $code;
+    }
+
+    /**
+     * @throws InvalidArgumentException if $name is not a valid unqualified PHP class name
+     */
+    private function validateClassName($name)
+    {
+        if (!is_string($name) || !preg_match('/^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$/', $name)) {
+            throw new InvalidArgumentException('Compiler class name must be a valid PHP class name');
+        }
     }
 
     /**
